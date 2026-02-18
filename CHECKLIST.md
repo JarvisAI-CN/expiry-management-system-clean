@@ -165,14 +165,32 @@ ORDER BY b.expiry_date;
 
 ---
 
-## 🔒 安全检查
+## 🔒 安全检查（必须项 + 2.8.x 专用）
 
-### 生产环境部署前
+### 生产环境部署前（必须全部打勾）
 - [ ] 修改 `db.php` 中数据库密码
 - [ ] 关闭 PHP 错误显示（修改 `error_reporting`）
 - [ ] 启用 HTTPS 证书
-- [ ] 配置访问控制（可选）
 - [ ] 定期备份数据库
+
+### 版本与自动升级安全（2.8.x 新增）
+- [ ] `VERSION.txt` 与前端显示版本一致（例如：2.8.1）
+- [ ] `index.php` / `admin.php` 中的 `APP_VERSION` 已同步更新到当前版本
+- [ ] 所有「升级 / 修复」相关 API（`check_upgrade` / `execute_upgrade` / `force_repair`）只能在 **登录后** 调用（经过 `checkAuth()` 检查）
+- [ ] 远程更新只使用 **HTTPS** 源（GitHub / 自建 HTTPS），不再使用 HTTP 明文 `FALLBACK_URL`
+- [ ] 远程拉取的 PHP 文件有基本完整性校验（如固定 hash 或签名文件），防止被中间人篡改
+
+### API 安全（2.8.1 新增 API 系统）
+- [ ] API 密钥在数据库中按 **哈希（如 SHA256）存储** 或至少经过加密，不直接保存明文
+- [ ] `api.php` 中的密钥验证逻辑与实际存储方式一致（避免“文档说哈希，代码查明文”的错配）
+- [ ] API 仅通过 `Authorization: Bearer <key>` 传递密钥，**禁止在 URL 中使用 `?api_key=` 传参（避免日志泄露密钥）**
+- [ ] CORS 策略限制为可信前端域名（生产环境不要使用 `Access-Control-Allow-Origin: *`）
+- [ ] 所有 API 端点都有清晰的限流方案或监控（防止被暴力调用）
+
+### SQL 安全（重点检查 2.8.x 新增功能）
+- [ ] 所有数据库查询都使用 **预处理语句（prepared statements）**，不直接拼接用户输入
+- [ ] 特别确认 `index.php` 中与盘点会话相关的接口（如 `submit_session`）已经使用 `prepare + bind_param`，不存在 `$sid` 直接拼接到 SQL 的情况
+- [ ] 日志记录中不包含敏感字段（密码、API Key 等）
 
 ### 备份脚本示例
 ```bash
