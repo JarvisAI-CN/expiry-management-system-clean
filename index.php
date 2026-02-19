@@ -225,8 +225,9 @@ if (isset($_GET['api'])) {
 
         // 将盘点会话记录写入 inventory_sessions，同样使用预处理语句
         $uid = $_SESSION['user_id'] ?? 0;
-        $stmtInsert = $conn->prepare("INSERT INTO inventory_sessions (session_key, user_id, item_count) VALUES (?, ?, ?)");
-        $stmtInsert->bind_param("sii", $sid, $uid, $count);
+        $uname = $_SESSION['username'] ?? '未知用户';
+        $stmtInsert = $conn->prepare("INSERT INTO inventory_sessions (session_key, user_id, username, item_count) VALUES (?, ?, ?, ?)");
+        $stmtInsert->bind_param("sisi", $sid, $uid, $uname, $count);
         $ok = $stmtInsert->execute();
 
         echo json_encode(['success' => $ok]);
@@ -239,10 +240,23 @@ if (isset($_GET['api'])) {
     }
     if ($action === 'get_session_details') {
         $sid = $_GET['session_id'];
+        // 获取盘点会话信息（包括盘点人和时间）
+        $stmtSession = $conn->prepare("SELECT session_key, username, created_at FROM inventory_sessions WHERE session_key = ?");
+        $stmtSession->bind_param("s", $sid);
+        $stmtSession->execute();
+        $sessionInfo = $stmtSession->get_result()->fetch_assoc();
+
+        // 获取盘点明细
         $query = "SELECT p.sku, p.name, b.expiry_date, b.quantity, p.removal_buffer FROM batches b JOIN products p ON b.product_id = p.id WHERE b.session_id = ? ORDER BY DATE_SUB(b.expiry_date, INTERVAL p.removal_buffer DAY) ASC";
-        $stmt = $conn->prepare($query); $stmt->bind_param("s", $sid); $stmt->execute();
-        $res = $stmt->get_result(); $list = []; while($r = $res->fetch_assoc()) $list[] = $r;
-        echo json_encode(['success'=>true, 'data'=>$list]); exit;
+        $stmt = $conn->prepare($query);
+        $stmt->bind_param("s", $sid);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $list = [];
+        while($r = $res->fetch_assoc()) $list[] = $r;
+
+        echo json_encode(['success'=>true, 'session_info'=>$sessionInfo, 'data'=>$list]);
+        exit;
     }
 }
 ?>
@@ -482,7 +496,10 @@ if (isset($_GET['api'])) {
         <div class="modal-dialog modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5>盘点单明细 (AI 整理)</h5>
+                    <div>
+                        <h5 class="mb-1">盘点单明细</h5>
+                        <small class="text-muted" id="sessionInfo"></small>
+                    </div>
                     <button class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body p-0">
@@ -840,9 +857,35 @@ if (isset($_GET['api'])) {
         }
         
         async function showSessionDetail(sid) {
-            const res = await fetch('index.php?api=get_session_details&session_id='+sid); 
+            const res = await fetch('index.php?api=get_session_details&session_id='+sid);
             const d = await res.json();
-            document.getElementById('inventoryDetailBody').innerHTML = d.data.map(i=>`<tr><td><b>${i.name}</b><br><small>${i.sku}</small></td><td>${i.expiry_date}</td><td>${i.quantity}</td></tr>`).join('');
+
+            // 显示盘点人和时间
+            if (d.session_info) {
+                const info = d.session_info;
+                const formattedTime = new Date(info.created_at).toLocaleString('zh-CN', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                document.getElementById('sessionInfo').innerHTML =
+                    `📅 盘点时间: ${formattedTime}<br>👤 盘点人: ${info.username || '未知'}`;
+            }
+
+            // 显示商品明细
+            document.getElementById('inventoryDetailBody').innerHTML = d.data.map(i=>`
+                <tr>
+                    <td>
+                        <b>${i.name}</b><br>
+                        <small class="text-muted">${i.sku}</small>
+                    </td>
+                    <td>${i.expiry_date}</td>
+                    <td class="text-center"><b>${i.quantity}</b></td>
+                </tr>
+            `).join('');
+
             new bootstrap.Modal(document.getElementById('detailModal')).show();
         }
         
