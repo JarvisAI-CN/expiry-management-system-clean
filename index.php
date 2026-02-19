@@ -10,7 +10,7 @@
  */
 
 // 升级配置
-define('APP_VERSION', '2.8.5');
+define('APP_VERSION', '2.9.0');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 
 session_start();
