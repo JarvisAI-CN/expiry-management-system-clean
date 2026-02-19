@@ -34,12 +34,17 @@ function validateApiKey($apiKey) {
 
     $apiKeyHash = hash('sha256', $apiKey);
 
-    $stmt = $conn->prepare("SELECT id, name, is_active FROM api_keys WHERE api_key_hash = ? AND is_active = 1");
+    $stmt = $conn->prepare("SELECT id, name, is_active, scopes, expires_at FROM api_keys WHERE api_key_hash = ? AND is_active = 1");
     $stmt->bind_param("s", $apiKeyHash);
     $stmt->execute();
     $result = $stmt->get_result();
 
     if ($row = $result->fetch_assoc()) {
+        // 检查是否已过期
+        if (!empty($row['expires_at']) && strtotime($row['expires_at']) < time()) {
+            return false;
+        }
+
         // 更新最后使用时间
         $updateStmt = $conn->prepare("UPDATE api_keys SET last_used_at = NOW() WHERE id = ?");
         $updateStmt->bind_param("i", $row['id']);
@@ -116,7 +121,24 @@ $allowedEndpoints = [
     'expiring' => 'getExpiringData',
     'summary' => 'getSummaryData',
     'categories' => 'getCategoriesData',
-    'all' => 'getAllData'
+    'all' => 'getAllData',
+    // v2.9.0 新增 REST 接口
+    'inventories' => 'getInventoriesData',
+    'items' => 'getItemsData',
+    'system.upgrade' => 'handleSystemUpgradeEndpoint'
+];
+
+// endpoint 所需的最小 scope
+$endpointScopes = [
+    'products' => 'read:products',
+    'batches' => 'read:batches',
+    'expiring' => 'read:expiring',
+    'summary' => 'read:summary',
+    'categories' => 'read:categories',
+    'all' => 'read:all',
+    'inventories' => 'read:inventories',
+    'items' => 'read:items',
+    'system.upgrade' => 'system:upgrade'
 ];
 
 if (!isset($allowedEndpoints[$endpoint])) {
@@ -126,6 +148,17 @@ if (!isset($allowedEndpoints[$endpoint])) {
         'message' => '无效的endpoint',
         'available_endpoints' => array_keys($allowedEndpoints)
     ], 400);
+}
+
+// 检查 scope 权限
+$requiredScope = $endpointScopes[$endpoint] ?? null;
+if ($requiredScope && !apiKeyHasScope($keyInfo, $requiredScope)) {
+    logApiAccess($keyInfo['id'], $endpoint, $_GET, 403);
+    jsonResponse([
+        'success' => false,
+        'message' => '当前API密钥权限不足',
+        'required_scope' => $requiredScope
+    ], 403);
 }
 
 // 调用对应的处理函数
@@ -141,6 +174,35 @@ try {
         'success' => false,
         'message' => '服务器错误: ' . $e->getMessage()
     ], 500);
+}
+
+// ========================================
+// 辅助函数 - Scope 检查
+// ========================================
+
+/**
+ * 当前 API Key 是否拥有指定 scope
+ */
+function apiKeyHasScope(array $keyInfo, string $requiredScope): bool {
+    // 没有 scopes 字段时视为只读全开
+    $scopesStr = trim($keyInfo['scopes'] ?? 'read:all');
+    if ($scopesStr === '') {
+        $scopesStr = 'read:all';
+    }
+
+    $scopes = array_filter(array_map('trim', explode(',', $scopesStr)));
+
+    // admin 拥有全部权限
+    if (in_array('admin', $scopes, true)) {
+        return true;
+    }
+
+    // read:all 赋予所有只读 endpoint 权限
+    if (strpos($requiredScope, 'read:') === 0 && in_array('read:all', $scopes, true)) {
+        return true;
+    }
+
+    return in_array($requiredScope, $scopes, true);
 }
 
 // ========================================
@@ -390,5 +452,159 @@ function getAllData() {
         'batches' => getBatchesData()['data'],
         'categories' => getCategoriesData()['data'],
         'summary' => getSummaryData()['statistics']
+    ];
+}
+
+/**
+ * v2.9.0 - 获取盘点会话列表
+ * endpoint: inventories
+ */
+function getInventoriesData() {
+    $conn = getDBConnection();
+    if (!$conn) {
+        throw new Exception('数据库连接失败');
+    }
+
+    $limit = intval($_GET['limit'] ?? 50);
+    if ($limit <= 0 || $limit > 200) {
+        $limit = 50;
+    }
+
+    $sql = "SELECT id, session_key, user_id, username, item_count, created_at
+            FROM inventory_sessions
+            ORDER BY created_at DESC
+            LIMIT ?";
+
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $limit);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    $sessions = [];
+    while ($row = $result->fetch_assoc()) {
+        $sessions[] = $row;
+    }
+
+    return [
+        'success' => true,
+        'endpoint' => 'inventories',
+        'count' => count($sessions),
+        'data' => $sessions
+    ];
+}
+
+/**
+ * v2.9.0 - 获取盘点明细 / 当前库存
+ * endpoint: items
+ *
+ * 用法：
+ *   - 按盘点会话查询:  items?session_key=xxx
+ *   - 按SKU聚合库存:   items?mode=stock
+ */
+function getItemsData() {
+    $conn = getDBConnection();
+    if (!$conn) {
+        throw new Exception('数据库连接失败');
+    }
+
+    // 1) 按盘点会话查询明细
+    $sessionKey = $_GET['session_key'] ?? ($_GET['session_id'] ?? '');
+    if (!empty($sessionKey)) {
+        $sql = "SELECT p.sku, p.name, b.expiry_date, b.quantity, p.removal_buffer
+                FROM batches b
+                JOIN products p ON b.product_id = p.id
+                WHERE b.session_id = ?
+                ORDER BY DATE_SUB(b.expiry_date, INTERVAL p.removal_buffer DAY) ASC";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("s", $sessionKey);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        $items = [];
+        while ($row = $result->fetch_assoc()) {
+            $items[] = $row;
+        }
+
+        return [
+            'success' => true,
+            'endpoint' => 'items',
+            'mode' => 'session',
+            'session_key' => $sessionKey,
+            'count' => count($items),
+            'data' => $items
+        ];
+    }
+
+    // 2) 默认：按SKU聚合当前库存
+    $sql = "SELECT p.id, p.sku, p.name,
+                   COALESCE(SUM(b.quantity), 0) AS total_quantity,
+                   MIN(b.expiry_date) AS nearest_expiry
+            FROM products p
+            LEFT JOIN batches b ON p.id = b.product_id
+            GROUP BY p.id, p.sku, p.name
+            ORDER BY p.id ASC";
+
+    $result = $conn->query($sql);
+    if (!$result) {
+        throw new Exception('查询失败: ' . $conn->error);
+    }
+
+    $items = [];
+    while ($row = $result->fetch_assoc()) {
+        $row['total_quantity'] = (int)($row['total_quantity'] ?? 0);
+        $items[] = $row;
+    }
+
+    return [
+        'success' => true,
+        'endpoint' => 'items',
+        'mode' => 'stock',
+        'count' => count($items),
+        'data' => $items
+    ];
+}
+
+/**
+ * v2.9.0 - 系统升级接口封装
+ * endpoint: system.upgrade
+ *
+ * GET  -> 返回升级状态
+ * POST -> 执行升级（调用 upgrade_v2.9.0.php）
+ */
+function handleSystemUpgradeEndpoint() {
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+    // 当前版本
+    $currentVersion = 'unknown';
+    $versionFile = __DIR__ . '/VERSION.txt';
+    if (is_readable($versionFile)) {
+        $currentVersion = trim(file_get_contents($versionFile));
+    }
+
+    if ($method !== 'POST') {
+        // 仅返回基础状态信息
+        return [
+            'success' => true,
+            'endpoint' => 'system.upgrade',
+            'mode' => 'status',
+            'current_version' => $currentVersion,
+            'target_version' => '2.9.0'
+        ];
+    }
+
+    // POST: 执行升级脚本
+    require_once __DIR__ . '/upgrade_v2.9.0.php';
+    if (function_exists('run_upgrade_v2_9_0')) {
+        $result = run_upgrade_v2_9_0(true);
+        $result['endpoint'] = 'system.upgrade';
+        $result['mode'] = 'execute';
+        return $result;
+    }
+
+    return [
+        'success' => false,
+        'endpoint' => 'system.upgrade',
+        'mode' => 'execute',
+        'message' => '升级脚本不存在或不可用'
     ];
 }

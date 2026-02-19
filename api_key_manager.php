@@ -25,7 +25,7 @@ function hashApiKeyForStorage($plainKey) {
 /**
  * 创建API密钥
  */
-function createApiKey($name, $createdBy, $expiresAt = null) {
+function createApiKey($name, $createdBy, $expiresAt = null, $scopes = 'read:all') {
     $conn = getDBConnection();
     if (!$conn) {
         return ['success' => false, 'message' => '数据库连接失败'];
@@ -35,8 +35,12 @@ function createApiKey($name, $createdBy, $expiresAt = null) {
     $apiKeyPlain = generateApiKey();
     $apiKeyHash = hashApiKeyForStorage($apiKeyPlain);
 
-    $stmt = $conn->prepare("INSERT INTO api_keys (name, api_key_hash, created_by, expires_at) VALUES (?, ?, ?, ?)");
-    $stmt->bind_param("ssis", $name, $apiKeyHash, $createdBy, $expiresAt);
+    if (trim($scopes) === '') {
+        $scopes = 'read:all';
+    }
+
+    $stmt = $conn->prepare("INSERT INTO api_keys (name, api_key_hash, created_by, expires_at, scopes) VALUES (?, ?, ?, ?, ?)");
+    $stmt->bind_param("ssiss", $name, $apiKeyHash, $createdBy, $expiresAt, $scopes);
 
     if ($stmt->execute()) {
         $keyId = $conn->insert_id;
@@ -64,7 +68,7 @@ function getApiKeys($userId = null) {
         return [];
     }
 
-    $sql = "SELECT ak.id, ak.name, ak.is_active, ak.created_at, ak.last_used_at, ak.created_by, u.username as creator_name
+    $sql = "SELECT ak.id, ak.name, ak.is_active, ak.created_at, ak.last_used_at, ak.created_by, ak.scopes, u.username as creator_name
             FROM api_keys ak
             LEFT JOIN users u ON ak.created_by = u.id";
 

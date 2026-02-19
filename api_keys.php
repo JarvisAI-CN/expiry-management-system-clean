@@ -31,12 +31,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'create':
             $name = trim($_POST['name'] ?? '');
             $expiresAt = !empty($_POST['expires_at']) ? $_POST['expires_at'] : null;
+            $scopes = trim($_POST['scopes'] ?? 'read:all');
 
             if (empty($name)) {
                 $message = '请输入密钥名称';
                 $messageType = 'danger';
             } else {
-                $result = createApiKey($name, $userId, $expiresAt);
+                $result = createApiKey($name, $userId, $expiresAt, $scopes);
                 if ($result['success']) {
                     $message = "API密钥创建成功！<br><strong>请保存您的密钥：</strong><code style='font-size:16px;'>" . htmlspecialchars($result['api_key']) . "</code>";
                     $messageType = 'success';
@@ -142,6 +143,7 @@ $apiKeys = getApiKeys();
                                         <th>名称</th>
                                         <th>API密钥</th>
                                         <th>状态</th>
+                                        <th>Scopes</th>
                                         <th>创建时间</th>
                                         <th>最后使用</th>
                                         <th>操作</th>
@@ -162,6 +164,9 @@ $apiKeys = getApiKeys();
                                             <?php else: ?>
                                             <span class="badge bg-danger"><i class="bi bi-x-circle"></i> 禁用</span>
                                             <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <span class="badge bg-secondary"><?php echo htmlspecialchars($key['scopes'] ?? 'read:all'); ?></span>
                                         </td>
                                         <td><?php echo date('Y-m-d H:i', strtotime($key['created_at'])); ?></td>
                                         <td>
@@ -239,6 +244,13 @@ $apiKeys = getApiKeys();
                             <label for="expires_at" class="form-label">过期时间（可选）</label>
                             <input type="datetime-local" class="form-control" id="expires_at" name="expires_at">
                             <div class="form-text">留空表示永不过期</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="scopes" class="form-label">权限范围 Scopes（可选）</label>
+                            <input type="text" class="form-control" id="scopes" name="scopes" placeholder="例如：read:all 或 read:summary,read:products,system:upgrade">
+                            <div class="form-text">
+                                多个 scope 使用英文逗号分隔。默认 <code>read:all</code> 仅开放只读接口，如需调用 <code>system.upgrade</code> 需包含 <code>system:upgrade</code>。
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">

@@ -373,6 +373,8 @@ if (isset($_GET['api'])) {
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end shadow border-0">
                     <li><a class="dropdown-item" href="admin.php">管理后台</a></li>
+                    <li><a class="dropdown-item" href="api_keys.php">API密钥管理</a></li>
+                    <li><hr class="dropdown-divider"></li>
                     <li><a class="dropdown-item text-danger" href="#" id="logoutBtn">退出登录</a></li>
                 </ul>
             </div>

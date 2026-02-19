@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS `api_keys` (
   `last_used_at` DATETIME DEFAULT NULL COMMENT '最后使用时间',
   `expires_at` DATETIME DEFAULT NULL COMMENT '过期时间（NULL=永不过期）',
   `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否启用：0=禁用，1=启用',
+  `scopes` VARCHAR(255) NOT NULL DEFAULT 'read:all' COMMENT '权限范围（逗号分隔的scope列表）',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_api_key_hash` (`api_key_hash`),
   KEY `idx_created_by` (`created_by`),
@@ -23,7 +24,8 @@ CREATE TABLE IF NOT EXISTS `api_keys` (
 -- 兼容已有安装：如表已存在且缺少 api_key_hash 字段，则补齐并迁移数据
 ALTER TABLE `api_keys`
   ADD COLUMN IF NOT EXISTS `api_key_hash` VARCHAR(64) NULL COMMENT 'API密钥哈希（sha256）' AFTER `name`,
-  ADD COLUMN IF NOT EXISTS `api_key` VARCHAR(64) NULL COMMENT '旧版明文/API密钥字段（兼容保留，不再用于校验）' AFTER `api_key_hash`;
+  ADD COLUMN IF NOT EXISTS `api_key` VARCHAR(64) NULL COMMENT '旧版明文/API密钥字段（兼容保留，不再用于校验）' AFTER `api_key_hash`,
+  ADD COLUMN IF NOT EXISTS `scopes` VARCHAR(255) NOT NULL DEFAULT 'read:all' COMMENT '权限范围（逗号分隔的scope列表）' AFTER `is_active`;
 
 -- 将旧字段中的明文/哈希迁移到 api_key_hash
 UPDATE `api_keys`
