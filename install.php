@@ -127,6 +127,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+            CREATE TABLE IF NOT EXISTS `api_keys` (
+              `id` INT(11) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '密钥ID',
+              `name` VARCHAR(100) NOT NULL COMMENT '密钥名称',
+              `api_key` VARCHAR(64) NOT NULL COMMENT 'API密钥（SHA256哈希）',
+              `created_by` INT(11) UNSIGNED NOT NULL COMMENT '创建者用户ID',
+              `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+              `last_used_at` DATETIME DEFAULT NULL COMMENT '最后使用时间',
+              `expires_at` DATETIME DEFAULT NULL COMMENT '过期时间',
+              `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否启用',
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `uk_api_key` (`api_key`),
+              KEY `idx_created_by` (`created_by`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API密钥管理表';
+
+            CREATE TABLE IF NOT EXISTS `api_logs` (
+              `id` BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '日志ID',
+              `api_key_id` INT(11) UNSIGNED NOT NULL COMMENT '关联密钥ID',
+              `endpoint` VARCHAR(100) NOT NULL COMMENT '访问的接口',
+              `request_params` TEXT COMMENT '请求参数',
+              `response_code` INT(5) DEFAULT 200 COMMENT 'HTTP状态码',
+              `ip_address` VARCHAR(45) DEFAULT NULL COMMENT '客户端IP',
+              `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '访问时间',
+              PRIMARY KEY (`id`),
+              KEY `idx_api_key_id` (`api_key_id`),
+              KEY `idx_created_at` (`created_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API访问日志表';
+
             -- 初始化默认设置
             INSERT IGNORE INTO `settings` (`s_key`, `s_value`) VALUES 
             ('ai_api_url', 'https://api.openai.com/v1'),
