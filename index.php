@@ -727,17 +727,31 @@ if (isset($_GET['api'])) {
             searchSKU(item.sku);
         }
         
-        // ✨ 新增：检测手电筒支持 (v2.8.3)
+        // ✨ 新增：检测手电筒支持 (v2.8.3) - 优化版，不重复请求摄像头
         async function checkFlashlightSupport() {
             try {
-                // 获取视频轨道
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' }
-                });
-                
+                // 延迟检测，等待html5QrCode完全启动
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                // 从已有的video元素获取视频轨道（不重复请求摄像头）
+                const videoElement = document.querySelector('#reader video');
+                if (!videoElement || !videoElement.srcObject) {
+                    console.log('视频元素未找到或未就绪');
+                    document.getElementById('flashlightBtn').style.display = 'none';
+                    return;
+                }
+
+                const stream = videoElement.srcObject;
                 videoTrack = stream.getVideoTracks()[0];
+
+                if (!videoTrack) {
+                    console.log('无法获取视频轨道');
+                    document.getElementById('flashlightBtn').style.display = 'none';
+                    return;
+                }
+
                 const capabilities = videoTrack.getCapabilities();
-                
+
                 // 检查是否支持torch（手电筒）
                 if (capabilities.torch) {
                     document.getElementById('flashlightBtn').style.display = 'flex';
