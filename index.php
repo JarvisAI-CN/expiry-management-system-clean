@@ -3,13 +3,14 @@
  * ========================================
  * 保质期管理系统 - 综合管理后台
  * 文件名: index.php
- * 版本: v2.8.2
+ * 版本: v2.8.3
  * 创建日期: 2026-02-15
+ * 更新日期: 2026-02-19
  * ========================================
  */
 
 // 升级配置
-define('APP_VERSION', '2.8.2');
+define('APP_VERSION', '2.8.3');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 
 session_start();
@@ -61,7 +62,7 @@ if (isset($_GET['api'])) {
     if ($action === 'logout') { session_destroy(); echo json_encode(['success'=>true]); exit; }
     
     // 升级相关接口必须登录后才能调用
-    if (in_array($action, ['check_upgrade', 'execute_upgrade'], true)) {
+    if (in_array($action, ['check_upgrade', 'execute_upgrade', 'fuzzy_search'], true)) {
         if (!checkAuth()) {
             // checkAuth 会输出统一的 JSON 错误并退出
             exit;
@@ -113,6 +114,42 @@ if (isset($_GET['api'])) {
     }
 
     checkAuth();
+    
+    // ✨ 新增：模糊搜索接口 (v2.8.3)
+    if ($action === 'fuzzy_search') {
+        $query = trim($_GET['q'] ?? '');
+        if (strlen($query) < 1) {
+            echo json_encode(['success' => true, 'results' => []]);
+            exit;
+        }
+        
+        // 限制搜索关键词长度，防止滥用
+        if (strlen($query) > 50) {
+            echo json_encode(['success' => false, 'message' => '搜索关键词过长']);
+            exit;
+        }
+        
+        // 使用预处理语句，支持SKU部分匹配和品名模糊搜索
+        $searchTerm = '%' . $query . '%';
+        $stmt = $conn->prepare("SELECT sku, name, created_at FROM products WHERE sku LIKE ? OR name LIKE ? ORDER BY created_at DESC LIMIT 10");
+        $stmt->bind_param("ss", $searchTerm, $searchTerm);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $products = [];
+        while ($row = $result->fetch_assoc()) {
+            // 格式化日期
+            $createdDate = date('Y-m-d', strtotime($row['created_at']));
+            $products[] = [
+                'sku' => $row['sku'],
+                'name' => $row['name'],
+                'created_at' => $createdDate
+            ];
+        }
+        
+        echo json_encode(['success' => true, 'results' => $products]);
+        exit;
+    }
     
     if ($action === 'get_product') {
         $sku = $_GET['sku'] ?? '';
@@ -228,113 +265,606 @@ if (isset($_GET['api'])) {
         .bg-past { background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%); }
         .view-section { display: none; } .view-section.active { display: block; }
         #scanOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2000; display: none; flex-direction: column; }
-        #reader { width: 100%; height: 100%; }
+        #reader { width: 100%; height: 100%; position: relative; }
         .pending-item { border-left: 4px solid var(--primary-color); padding: 10px; background: #fff; margin-bottom: 8px; border-radius: 8px; font-size: 0.8rem; }
+        
+        /* ✨ 新增：模糊搜索弹窗样式 (v2.8.3) */
+        #searchResultsModal .modal-content { border-radius: 15px; border: none; }
+        #searchResultsList { max-height: 300px; overflow-y: auto; }
+        .search-result-item { 
+            padding: 12px; 
+            border-bottom: 1px solid #f0f0f0; 
+            cursor: pointer; 
+            transition: background 0.2s; 
+        }
+        .search-result-item:hover { background: #f8f9fa; }
+        .search-result-item:last-child { border-bottom: none; }
+        .search-sku { 
+            font-weight: bold; 
+            color: var(--primary-color); 
+            font-size: 1.1rem; 
+        }
+        .search-name { 
+            color: #333; 
+            margin-top: 4px; 
+        }
+        .search-date { 
+            font-size: 0.85rem; 
+            color: #999; 
+            margin-top: 4px; 
+        }
+        
+        /* ✨ 新增：手电筒按钮样式 (v2.8.3) */
+        #flashlightBtn { 
+            position: absolute; 
+            top: 70px; 
+            right: 20px; 
+            z-index: 2100; 
+            background: rgba(255,255,255,0.9); 
+            border: none; 
+            border-radius: 50%; 
+            width: 50px; 
+            height: 50px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3); 
+            cursor: pointer; 
+            font-size: 1.5rem; 
+            transition: all 0.3s; 
+        }
+        #flashlightBtn.active { 
+            background: #ffd700; 
+            box-shadow: 0 0 20px rgba(255,215,0,0.8); 
+        }
+        #flashlightBtn:hover { 
+            transform: scale(1.1); 
+        }
+        
+        /* SKU输入框搜索图标 */
+        .sku-input-wrapper { position: relative; }
+        .sku-search-icon { 
+            position: absolute; 
+            right: 10px; 
+            top: 50%; 
+            transform: translateY(-50%); 
+            color: var(--primary-color); 
+            cursor: pointer; 
+            pointer-events: none; 
+        }
     </style>
 </head>
 <body>
     <div id="scanOverlay">
-        <div class="p-3 d-flex justify-content-between text-white"><button class="btn btn-dark rounded-pill" id="stopScanBtn"><i class="bi bi-x-lg"></i></button><div class="fw-bold">扫一扫</div><div style="width:40px"></div></div>
+        <div class="p-3 d-flex justify-content-between text-white">
+            <button class="btn btn-dark rounded-pill" id="stopScanBtn"><i class="bi bi-x-lg"></i></button>
+            <div class="fw-bold">扫一扫</div>
+            <div style="width:40px"></div>
+        </div>
         <div id="reader"></div>
+        <!-- ✨ 新增：手电筒按钮 (v2.8.3) -->
+        <button type="button" id="flashlightBtn" style="display: none;">
+            <i class="bi bi-lightbulb"></i>
+        </button>
     </div>
-    <div class="app-header mb-3"><div class="container d-flex justify-content-between align-items-center">
-        <div><h1 class="h5 mb-0 text-primary fw-bold">保质期管理 v<?php echo APP_VERSION; ?></h1></div>
-        <?php if(isset($_SESSION['user_id'])): ?>
-        <div class="dropdown"><button class="btn btn-light btn-sm rounded-pill" data-bs-toggle="dropdown"><i class="bi bi-list"></i></button>
-            <ul class="dropdown-menu dropdown-menu-end shadow border-0">
-                <li><a class="dropdown-item" href="admin.php">管理后台</a></li>
-                <li><a class="dropdown-item text-danger" href="#" id="logoutBtn">退出登录</a></li>
-            </ul>
-        </div><?php endif; ?>
-    </div></div>
+    <div class="app-header mb-3">
+        <div class="container d-flex justify-content-between align-items-center">
+            <div>
+                <h1 class="h5 mb-0 text-primary fw-bold">保质期管理 v<?php echo APP_VERSION; ?></h1>
+            </div>
+            <?php if(isset($_SESSION['user_id'])): ?>
+            <div class="dropdown">
+                <button class="btn btn-light btn-sm rounded-pill" data-bs-toggle="dropdown">
+                    <i class="bi bi-list"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow border-0">
+                    <li><a class="dropdown-item" href="admin.php">管理后台</a></li>
+                    <li><a class="dropdown-item text-danger" href="#" id="logoutBtn">退出登录</a></li>
+                </ul>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
     <div class="container">
         <?php if(!isset($_SESSION['user_id'])): ?>
-        <div class="custom-card text-center mt-5"><h3 class="h5 mb-4 fw-bold">⚡ 请登录</h3><form id="loginForm"><input type="text" class="form-control mb-3" id="loginUser" placeholder="用户名" required><input type="password" class="form-control mb-3" id="loginPass" placeholder="密码" required><button type="submit" class="btn btn-primary w-100">进入</button></form></div>
+        <div class="custom-card text-center mt-5">
+            <h3 class="h5 mb-4 fw-bold">⚡ 请登录</h3>
+            <form id="loginForm">
+                <input type="text" class="form-control mb-3" id="loginUser" placeholder="用户名" required>
+                <input type="password" class="form-control mb-3" id="loginPass" placeholder="密码" required>
+                <button type="submit" class="btn btn-primary w-100">进入</button>
+            </form>
+        </div>
         <?php else: ?>
         <div id="portalView" class="view-section active">
-            <button class="portal-btn" onclick="switchView('new')"><i class="bi bi-plus-circle-fill bg-new"></i><div class="text-start"><span class="fw-bold">新增盘点录入</span><br><small class="text-muted">快速扫码记效期</small></div></button>
-            <button class="portal-btn" onclick="switchView('past')"><i class="bi bi-clock-history bg-past"></i><div class="text-start"><span class="fw-bold">查看往期盘点</span><br><small class="text-muted">浏览历史记录</small></div></button>
-            <div class="custom-card"><div class="progress mb-2" style="height:10px"><div id="bar-expired" class="progress-bar bg-danger"></div><div id="bar-urgent" class="progress-bar bg-warning"></div><div id="bar-healthy" class="progress-bar bg-success"></div></div><div class="row text-center small g-0"><div class="col-4 text-danger fw-bold" id="val-expired">0</div><div class="col-4 text-warning fw-bold" id="val-urgent">0</div><div class="col-4 text-success fw-bold" id="val-healthy">0</div></div></div>
+            <button class="portal-btn" onclick="switchView('new')">
+                <i class="bi bi-plus-circle-fill bg-new"></i>
+                <div class="text-start">
+                    <span class="fw-bold">新增盘点录入</span>
+                    <br><small class="text-muted">快速扫码记效期</small>
+                </div>
+            </button>
+            <button class="portal-btn" onclick="switchView('past')">
+                <i class="bi bi-clock-history bg-past"></i>
+                <div class="text-start">
+                    <span class="fw-bold">查看往期盘点</span>
+                    <br><small class="text-muted">浏览历史记录</small>
+                </div>
+            </button>
+            <div class="custom-card">
+                <div class="progress mb-2" style="height:10px">
+                    <div id="bar-expired" class="progress-bar bg-danger"></div>
+                    <div id="bar-urgent" class="progress-bar bg-warning"></div>
+                    <div id="bar-healthy" class="progress-bar bg-success"></div>
+                </div>
+                <div class="row text-center small g-0">
+                    <div class="col-4 text-danger fw-bold" id="val-expired">0</div>
+                    <div class="col-4 text-warning fw-bold" id="val-urgent">0</div>
+                    <div class="col-4 text-success fw-bold" id="val-healthy">0</div>
+                </div>
+            </div>
         </div>
         <div id="newView" class="view-section">
-            <button class="btn btn-link btn-sm text-decoration-none mb-2" onclick="switchView('portal')"><i class="bi bi-chevron-left"></i> 返回门户</button>
-            <div class="scan-trigger-area mb-3 shadow-sm" id="startScanBtn" style="padding:40px 20px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 15px; text-align: center; color: white;"><i class="bi bi-qr-code-scan d-block h1"></i><span>点击添加 (扫一扫)</span></div>
+            <button class="btn btn-link btn-sm text-decoration-none mb-2" onclick="switchView('portal')">
+                <i class="bi bi-chevron-left"></i> 返回门户
+            </button>
+            <div class="scan-trigger-area mb-3 shadow-sm" id="startScanBtn" style="padding:40px 20px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 15px; text-align: center; color: white;">
+                <i class="bi bi-qr-code-scan d-block h1"></i>
+                <span>点击添加 (扫一扫)</span>
+            </div>
             <div id="pendingList"></div>
-            <div class="d-grid mt-3"><button class="btn btn-primary btn-lg shadow fw-bold" id="submitSessionBtn" disabled>提交本次盘点单</button></div>
+            <div class="d-grid mt-3">
+                <button class="btn btn-primary btn-lg shadow fw-bold" id="submitSessionBtn" disabled>提交本次盘点单</button>
+            </div>
         </div>
-        <div id="pastView" class="view-section"><button class="btn btn-link btn-sm text-decoration-none mb-2" onclick="switchView('portal')"><i class="bi bi-chevron-left"></i> 返回门户</button><div id="sessionList"></div></div>
+        <div id="pastView" class="view-section">
+            <button class="btn btn-link btn-sm text-decoration-none mb-2" onclick="switchView('portal')">
+                <i class="bi bi-chevron-left"></i> 返回门户
+            </button>
+            <div id="sessionList"></div>
+        </div>
         <?php endif; ?>
     </div>
-    <div class="modal fade" id="entryModal" data-bs-backdrop="static"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5>录入详情</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body bg-light">
-        <form id="productForm"><div class="custom-card mb-2"><input type="text" class="form-control mb-2" id="sku" readonly><select class="form-select mb-2" id="categoryId"><option value="0">分类</option></select><input type="text" class="form-control mb-2" id="productName" placeholder="商品名称"><input type="number" class="form-control" id="removalBuffer" placeholder="缓冲天数"></div><div id="batchesContainer"></div><button type="button" class="btn btn-outline-success btn-sm w-100" id="addBatchBtn">+ 批次</button></form>
-    </div><div class="modal-footer d-grid"><button class="btn btn-primary" id="confirmEntryBtn">确定添加</button></div></div></div></div>
-    <div class="modal fade" id="detailModal"><div class="modal-dialog modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5>盘点单明细 (AI 整理)</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body p-0"><table class="table table-sm small mb-0"><thead><tr><th>商品</th><th>效期</th><th>数</th></tr></thead><tbody id="inventoryDetailBody"></tbody></table></div></div></div></div>
+    
+    <!-- 商品录入弹窗 -->
+    <div class="modal fade" id="entryModal" data-bs-backdrop="static">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5>录入详情</h5>
+                    <button class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <form id="productForm">
+                        <div class="custom-card mb-2">
+                            <div class="sku-input-wrapper">
+                                <input type="text" class="form-control mb-2" id="sku" placeholder="SKU（支持模糊搜索）" autocomplete="off">
+                                <i class="bi bi-search sku-search-icon"></i>
+                            </div>
+                            <select class="form-select mb-2" id="categoryId">
+                                <option value="0">分类</option>
+                            </select>
+                            <input type="text" class="form-control mb-2" id="productName" placeholder="商品名称">
+                            <input type="number" class="form-control" id="removalBuffer" placeholder="缓冲天数">
+                        </div>
+                        <div id="batchesContainer"></div>
+                        <button type="button" class="btn btn-outline-success btn-sm w-100" id="addBatchBtn">+ 批次</button>
+                    </form>
+                </div>
+                <div class="modal-footer d-grid">
+                    <button class="btn btn-primary" id="confirmEntryBtn">确定添加</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ✨ 新增：模糊搜索结果弹窗 (v2.8.3) -->
+    <div class="modal fade" id="searchResultsModal" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-search"></i> 搜索结果
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div id="searchResultsList">
+                        <!-- 搜索结果将动态插入这里 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 盘点单明细弹窗 -->
+    <div class="modal fade" id="detailModal">
+        <div class="modal-dialog modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5>盘点单明细 (AI 整理)</h5>
+                    <button class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <table class="table table-sm small mb-0">
+                        <thead>
+                            <tr>
+                                <th>商品</th>
+                                <th>效期</th>
+                                <th>数</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryDetailBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        let html5QrCode = null, currentSessionId = 'S'+Date.now(), pendingData = [];
-        function switchView(v) { document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active')); document.getElementById(v+'View').classList.add('active'); if(v==='past') loadPast(); }
-        function showAlert(m, t='info') { const el = document.createElement('div'); el.className = `alert alert-${t} fade show shadow position-fixed top-0 start-50 translate-middle-x mt-3`; el.style.zIndex='3000'; el.innerText=m; document.body.appendChild(el); setTimeout(()=>el.remove(), 2500); }
+        let html5QrCode = null, 
+            currentSessionId = 'S'+Date.now(), 
+            pendingData = [],
+            searchTimeout = null,
+            flashlightState = false,
+            videoTrack = null;
+        
+        function switchView(v) { 
+            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active')); 
+            document.getElementById(v+'View').classList.add('active'); 
+            if(v==='past') loadPast(); 
+        }
+        
+        function showAlert(m, t='info') { 
+            const el = document.createElement('div'); 
+            el.className = `alert alert-${t} fade show shadow position-fixed top-0 start-50 translate-middle-x mt-3`; 
+            el.style.zIndex='3000'; 
+            el.innerText=m; 
+            document.body.appendChild(el); 
+            setTimeout(()=>el.remove(), 2500); 
+        }
+        
         document.addEventListener('DOMContentLoaded', () => {
-            if(document.getElementById('portalView')) { refreshHealth(); loadCats(); checkUpgrade(); }
-            document.getElementById('loginForm')?.addEventListener('submit', async(e)=>{ e.preventDefault(); const res = await fetch('index.php?api=login',{method:'POST', body:JSON.stringify({username:document.getElementById('loginUser').value, password:document.getElementById('loginPass').value})}); if((await res.json()).success) location.reload(); else showAlert('错误','danger'); });
-            document.getElementById('logoutBtn')?.addEventListener('click', async () => { await fetch('index.php?api=logout'); location.reload(); });
-            document.getElementById('startScanBtn')?.addEventListener('click', ()=>{ document.getElementById('scanOverlay').style.display='flex'; if(!html5QrCode) html5QrCode = new Html5Qrcode("reader"); html5QrCode.start({facingMode:"environment"}, {fps:15, qrbox:250}, (text)=>{ document.getElementById('sku').value=text; html5QrCode.stop(); document.getElementById('scanOverlay').style.display='none'; searchSKU(text); }); });
-            document.getElementById('stopScanBtn')?.addEventListener('click', ()=>{ if(html5QrCode) html5QrCode.stop(); document.getElementById('scanOverlay').style.display='none'; });
-            document.getElementById('addBatchBtn')?.addEventListener('click', ()=>addBatchRow());
-            document.getElementById('confirmEntryBtn')?.addEventListener('click', ()=>{
-                const batches = []; document.querySelectorAll('.batch-row').forEach(r=>{ batches.push({expiry_date:r.querySelector('.e-in').value, quantity:r.querySelector('.q-in').value}); });
-                pendingData.push({sku:document.getElementById('sku').value, name:document.getElementById('productName').value, category_id:document.getElementById('categoryId').value, removal_buffer:document.getElementById('removalBuffer').value, batches, session_id:currentSessionId});
-                updatePendingList(); bootstrap.Modal.getInstance(document.getElementById('entryModal')).hide();
+            if(document.getElementById('portalView')) {
+                refreshHealth();
+                loadCats();
+                checkUpgrade();
+
+                // ✨ 新增：SKU输入框模糊搜索功能 (v2.8.3)
+                let searchTimeout = null; // 防抖定时器
+                const skuInput = document.getElementById('sku');
+                if (skuInput) {
+                    skuInput.addEventListener('input', function(e) {
+                        const query = e.target.value.trim();
+                        
+                        // 清除之前的定时器
+                        if (searchTimeout) {
+                            clearTimeout(searchTimeout);
+                        }
+                        
+                        // 如果输入为空，不搜索
+                        if (query.length < 1) {
+                            return;
+                        }
+                        
+                        // 设置延迟搜索（防抖）
+                        searchTimeout = setTimeout(() => {
+                            performFuzzySearch(query);
+                        }, 300);
+                    });
+                }
+            }
+            
+            document.getElementById('loginForm')?.addEventListener('submit', async(e)=>{
+                e.preventDefault(); 
+                const res = await fetch('index.php?api=login',{
+                    method:'POST', 
+                    body:JSON.stringify({
+                        username:document.getElementById('loginUser').value, 
+                        password:document.getElementById('loginPass').value
+                    })
+                }); 
+                if((await res.json()).success) location.reload(); 
+                else showAlert('错误','danger'); 
             });
+            
+            document.getElementById('logoutBtn')?.addEventListener('click', async () => { 
+                await fetch('index.php?api=logout'); 
+                location.reload(); 
+            });
+            
+            document.getElementById('startScanBtn')?.addEventListener('click', async ()=>{
+                document.getElementById('scanOverlay').style.display='flex'; 
+                if(!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+                
+                try {
+                    await html5QrCode.start(
+                        {facingMode:"environment"}, 
+                        {fps:15, qrbox:250}, 
+                        async (text)=>{
+                            document.getElementById('sku').value=text; 
+                            await html5QrCode.stop(); 
+                            document.getElementById('scanOverlay').style.display='none'; 
+                            searchSKU(text); 
+                        }
+                    );
+                    
+                    // ✨ 新增：检测并显示手电筒按钮 (v2.8.3)
+                    await checkFlashlightSupport();
+                } catch (err) {
+                    showAlert('无法启动相机: ' + err, 'danger');
+                    document.getElementById('scanOverlay').style.display='none';
+                }
+            });
+            
+            document.getElementById('stopScanBtn')?.addEventListener('click', async ()=>{
+                if(html5QrCode) {
+                    await html5QrCode.stop();
+                    videoTrack = null;
+                }
+                document.getElementById('scanOverlay').style.display='none';
+                // 隐藏手电筒按钮
+                document.getElementById('flashlightBtn').style.display = 'none';
+                flashlightState = false;
+            });
+            
+            // ✨ 新增：手电筒开关控制 (v2.8.3)
+            document.getElementById('flashlightBtn')?.addEventListener('click', async function() {
+                await toggleFlashlight();
+            });
+            
+            document.getElementById('addBatchBtn')?.addEventListener('click', ()=>addBatchRow());
+            
+            document.getElementById('confirmEntryBtn')?.addEventListener('click', ()=>{
+                const batches = []; 
+                document.querySelectorAll('.batch-row').forEach(r=>{ 
+                    batches.push({
+                        expiry_date:r.querySelector('.e-in').value, 
+                        quantity:r.querySelector('.q-in').value
+                    }); 
+                });
+                pendingData.push({
+                    sku:document.getElementById('sku').value, 
+                    name:document.getElementById('productName').value, 
+                    category_id:document.getElementById('categoryId').value, 
+                    removal_buffer:document.getElementById('removalBuffer').value, 
+                    batches, 
+                    session_id:currentSessionId
+                });
+                updatePendingList(); 
+                bootstrap.Modal.getInstance(document.getElementById('entryModal')).hide();
+            });
+            
             document.getElementById('submitSessionBtn')?.addEventListener('click', async()=>{
-                for(let item of pendingData) await fetch('index.php?api=save_product',{method:'POST', body:JSON.stringify(item)});
-                await fetch('index.php?api=submit_session',{method:'POST', body:JSON.stringify({session_id:currentSessionId})});
-                showAlert('提交成功','success'); pendingData=[]; currentSessionId='S'+Date.now(); updatePendingList(); switchView('portal'); refreshHealth();
+                for(let item of pendingData) {
+                    await fetch('index.php?api=save_product',{
+                        method:'POST', 
+                        body:JSON.stringify(item)
+                    });
+                }
+                await fetch('index.php?api=submit_session',{
+                    method:'POST', 
+                    body:JSON.stringify({session_id:currentSessionId})
+                });
+                showAlert('提交成功','success'); 
+                pendingData=[]; 
+                currentSessionId='S'+Date.now(); 
+                updatePendingList(); 
+                switchView('portal'); 
+                refreshHealth();
             });
         });
-        async function searchSKU(sku) {
-            const res = await fetch('index.php?api=get_product&sku='+sku); const d = await res.json();
-            document.getElementById('productForm').reset(); document.getElementById('batchesContainer').innerHTML='';
-            document.getElementById('sku').value = sku; const fields = ['categoryId','productName','removalBuffer'];
-            if(d.exists) {
-                document.getElementById('productName').value=d.product.name; document.getElementById('categoryId').value=d.product.category_id; document.getElementById('removalBuffer').value=d.product.removal_buffer;
-                fields.forEach(f => { document.getElementById(f).readOnly=true; if(document.getElementById(f).tagName==='SELECT') document.getElementById(f).disabled=true; });
-            } else { fields.forEach(f => { document.getElementById(f).readOnly=false; if(document.getElementById(f).tagName==='SELECT') document.getElementById(f).disabled=false; }); }
-            addBatchRow(); new bootstrap.Modal(document.getElementById('entryModal')).show();
+        
+        // ✨ 新增：模糊搜索功能 (v2.8.3)
+        async function performFuzzySearch(query) {
+            try {
+                const res = await fetch(`index.php?api=fuzzy_search&q=${encodeURIComponent(query)}`);
+                const data = await res.json();
+                
+                if (data.success && data.results.length > 0) {
+                    showSearchResults(data.results);
+                }
+            } catch (err) {
+                console.error('搜索失败:', err);
+            }
         }
+        
+        // 显示搜索结果（XSS安全）
+        function showSearchResults(results) {
+            const listContainer = document.getElementById('searchResultsList');
+            
+            // 清空之前的结果
+            listContainer.innerHTML = '';
+            
+            // 构建结果列表
+            results.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'search-result-item';
+                
+                // 安全构建HTML结构，防止XSS攻击
+                const skuDiv = document.createElement('div');
+                skuDiv.className = 'search-sku';
+                skuDiv.textContent = '📦 ' + item.sku;
+                
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'search-name';
+                nameDiv.textContent = item.name; // ✅ 使用textContent防止XSS
+                
+                const dateDiv = document.createElement('div');
+                dateDiv.className = 'search-date';
+                dateDiv.textContent = '入库时间: ' + item.created_at;
+                
+                div.appendChild(skuDiv);
+                div.appendChild(nameDiv);
+                div.appendChild(dateDiv);
+                
+                // 点击选择该项
+                div.addEventListener('click', () => {
+                    selectSearchResult(item);
+                });
+                
+                listContainer.appendChild(div);
+            });
+            
+            // 显示弹窗
+            const modal = new bootstrap.Modal(document.getElementById('searchResultsModal'));
+            modal.show();
+        }
+        
+        // 选择搜索结果
+        function selectSearchResult(item) {
+            // 填充SKU并关闭弹窗
+            document.getElementById('sku').value = item.sku;
+            
+            // 关闭搜索结果弹窗
+            const modal = bootstrap.Modal.getInstance(document.getElementById('searchResultsModal'));
+            if (modal) {
+                modal.hide();
+            }
+            
+            // 触发SKU搜索
+            searchSKU(item.sku);
+        }
+        
+        // ✨ 新增：检测手电筒支持 (v2.8.3)
+        async function checkFlashlightSupport() {
+            try {
+                // 获取视频轨道
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }
+                });
+                
+                videoTrack = stream.getVideoTracks()[0];
+                const capabilities = videoTrack.getCapabilities();
+                
+                // 检查是否支持torch（手电筒）
+                if (capabilities.torch) {
+                    document.getElementById('flashlightBtn').style.display = 'flex';
+                } else {
+                    document.getElementById('flashlightBtn').style.display = 'none';
+                }
+            } catch (err) {
+                console.error('无法检测手电筒支持:', err);
+                document.getElementById('flashlightBtn').style.display = 'none';
+            }
+        }
+        
+        // ✨ 新增：切换手电筒 (v2.8.3)
+        async function toggleFlashlight() {
+            if (!videoTrack) {
+                showAlert('相机未启动', 'warning');
+                return;
+            }
+            
+            try {
+                flashlightState = !flashlightState;
+                
+                await videoTrack.applyConstraints({
+                    advanced: [{ torch: flashlightState }]
+                });
+                
+                // 更新按钮样式
+                const btn = document.getElementById('flashlightBtn');
+                if (flashlightState) {
+                    btn.classList.add('active');
+                    btn.innerHTML = '<i class="bi bi-lightbulb-fill"></i>';
+                } else {
+                    btn.classList.remove('active');
+                    btn.innerHTML = '<i class="bi bi-lightbulb"></i>';
+                }
+            } catch (err) {
+                console.error('切换手电筒失败:', err);
+                showAlert('手电筒控制失败', 'danger');
+                flashlightState = false;
+            }
+        }
+        
+        async function searchSKU(sku) {
+            const res = await fetch('index.php?api=get_product&sku='+sku); 
+            const d = await res.json();
+            document.getElementById('productForm').reset(); 
+            document.getElementById('batchesContainer').innerHTML='';
+            document.getElementById('sku').value = sku; 
+            const fields = ['categoryId','productName','removalBuffer'];
+            if(d.exists) {
+                document.getElementById('productName').value=d.product.name; 
+                document.getElementById('categoryId').value=d.product.category_id; 
+                document.getElementById('removalBuffer').value=d.product.removal_buffer;
+                fields.forEach(f => { 
+                    document.getElementById(f).readOnly=true; 
+                    if(document.getElementById(f).tagName==='SELECT') 
+                        document.getElementById(f).disabled=true; 
+                });
+            } else { 
+                fields.forEach(f => { 
+                    document.getElementById(f).readOnly=false; 
+                    if(document.getElementById(f).tagName==='SELECT') 
+                        document.getElementById(f).disabled=false; 
+                }); 
+            }
+            addBatchRow(); 
+            new bootstrap.Modal(document.getElementById('entryModal')).show();
+        }
+        
         function addBatchRow(data=null) {
-            const div = document.createElement('div'); div.className='batch-row row g-1 mb-2';
+            const div = document.createElement('div'); 
+            div.className='batch-row row g-1 mb-2';
             div.innerHTML=`<div class="col-7"><input type="date" class="form-control form-control-sm e-in" value="${data?data.expiry_date:''}" required></div><div class="col-3"><input type="number" class="form-control form-control-sm q-in" placeholder="数" value="${data?data.quantity:''}" required></div><div class="col-2"><button type="button" class="btn btn-sm btn-outline-danger border-0" onclick="this.parentElement.parentElement.remove()"><i class="bi bi-trash"></i></button></div>`;
             document.getElementById('batchesContainer').appendChild(div);
         }
+        
         function updatePendingList() {
             document.getElementById('submitSessionBtn').disabled = pendingData.length===0;
             document.getElementById('pendingList').innerHTML = pendingData.map(i=>`<div class="pending-item shadow-sm"><div><b>${i.name}</b></div><small class="text-muted">${i.sku} · ${i.batches.length}批</small></div>`).join('') || '<div class="text-center py-5 text-muted small">暂无数据</div>';
         }
+        
         async function loadPast() {
-            const res = await fetch('index.php?api=get_past_sessions'); const d = await res.json();
+            const res = await fetch('index.php?api=get_past_sessions'); 
+            const d = await res.json();
             document.getElementById('sessionList').innerHTML = d.sessions.map(s=>`<div class="custom-card mb-2" onclick="showSessionDetail('${s.session_key}')"><div class="d-flex justify-content-between align-items-center"><div><b>盘点单 ${s.session_key}</b><br><small class="text-muted">${s.created_at} · ${s.item_count}品项</small></div><i class="bi bi-chevron-right"></i></div></div>`).join('');
         }
+        
         async function showSessionDetail(sid) {
-            const res = await fetch('index.php?api=get_session_details&session_id='+sid); const d = await res.json();
+            const res = await fetch('index.php?api=get_session_details&session_id='+sid); 
+            const d = await res.json();
             document.getElementById('inventoryDetailBody').innerHTML = d.data.map(i=>`<tr><td><b>${i.name}</b><br><small>${i.sku}</small></td><td>${i.expiry_date}</td><td>${i.quantity}</td></tr>`).join('');
             new bootstrap.Modal(document.getElementById('detailModal')).show();
         }
+        
         async function loadCats() {
-            const res = await fetch('index.php?api=get_categories'); const d = await res.json();
+            const res = await fetch('index.php?api=get_categories'); 
+            const d = await res.json();
             document.getElementById('categoryId').innerHTML = '<option value="0">选择分类</option>' + d.categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
         }
+        
         async function refreshHealth() {
-            const res = await fetch('index.php?api=get_health_report'); const d = (await res.json()).report;
+            const res = await fetch('index.php?api=get_health_report'); 
+            const d = (await res.json()).report;
             const t = parseInt(d.expired)+parseInt(d.urgent)+parseInt(d.healthy);
-            if(t>0) { document.getElementById('bar-expired').style.width=(d.expired/t*100)+'%'; document.getElementById('bar-urgent').style.width=(d.urgent/t*100)+'%'; document.getElementById('bar-healthy').style.width=(d.healthy/t*100)+'%'; }
-            document.getElementById('val-expired').innerText=d.expired; document.getElementById('val-urgent').innerText=d.urgent; document.getElementById('val-healthy').innerText=d.healthy;
+            if(t>0) { 
+                document.getElementById('bar-expired').style.width=(d.expired/t*100)+'%'; 
+                document.getElementById('bar-urgent').style.width=(d.urgent/t*100)+'%'; 
+                document.getElementById('bar-healthy').style.width=(d.healthy/t*100)+'%'; 
+            }
+            document.getElementById('val-expired').innerText=d.expired; 
+            document.getElementById('val-urgent').innerText=d.urgent; 
+            document.getElementById('val-healthy').innerText=d.healthy;
         }
+        
         async function checkUpgrade() {
-            const res = await fetch('index.php?api=check_upgrade'); const d = await res.json();
+            const res = await fetch('index.php?api=check_upgrade'); 
+            const d = await res.json();
             if(d.has_update) {
-                const b = document.createElement('button'); b.className='btn btn-warning btn-sm w-100 mb-3'; b.innerText='发现新版本 v'+d.latest+', 点击升级';
-                b.onclick = async() => { b.disabled=true; b.innerText='升级中...'; await fetch('index.php?api=execute_upgrade'); location.reload(); };
+                const b = document.createElement('button'); 
+                b.className='btn btn-warning btn-sm w-100 mb-3'; 
+                b.innerText='发现新版本 v'+d.latest+', 点击升级';
+                b.onclick = async() => { 
+                    b.disabled=true; 
+                    b.innerText='升级中...'; 
+                    await fetch('index.php?api=execute_upgrade'); 
+                    location.reload(); 
+                };
                 document.getElementById('portalView').prepend(b);
             }
         }
