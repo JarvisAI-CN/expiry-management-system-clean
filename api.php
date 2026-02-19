@@ -32,8 +32,10 @@ function validateApiKey($apiKey) {
         return false;
     }
 
-    $stmt = $conn->prepare("SELECT id, name, is_active FROM api_keys WHERE api_key = ? AND is_active = 1");
-    $stmt->bind_param("s", $apiKey);
+    $apiKeyHash = hash('sha256', $apiKey);
+
+    $stmt = $conn->prepare("SELECT id, name, is_active FROM api_keys WHERE api_key_hash = ? AND is_active = 1");
+    $stmt->bind_param("s", $apiKeyHash);
     $stmt->execute();
     $result = $stmt->get_result();
 

@@ -20,9 +20,8 @@ if (!isset($_SESSION['user_id'])) {
     exit; 
 }
 
-define('APP_VERSION', '2.7.3-alpha');
+define('APP_VERSION', '2.8.2');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
-define('FALLBACK_URL', 'http://150.109.204.23:8888/');
 
 // 处理管理端 API 请求
 if (isset($_GET['api'])) {
@@ -100,16 +99,29 @@ if (isset($_GET['api'])) {
         exit;
     }
 
-    // 5. 强制修复升级 (带 GitHub -> 本地 自动回退)
+    // 5. 强制修复升级（仅允许从官方 GitHub 源获取）
     if ($action === 'force_repair') {
         $files = ['index.php', 'db.php', 'install.php', 'admin.php', 'VERSION.txt'];
+        $ctx = stream_context_create(['http' => ['timeout' => 10]]);
+        $allOk = true;
+
         foreach ($files as $f) {
-            $ctx = stream_context_create(['http'=>['timeout'=>10]]);
             $c = @file_get_contents(UPDATE_URL . $f, false, $ctx);
-            if (!$c) $c = @file_get_contents(FALLBACK_URL . $f); // 3秒超时后自动切换到本地服务器
-            if ($c) @file_put_contents(__DIR__ . '/' . $f, $c);
+            if ($c === false) {
+                $allOk = false;
+                break;
+            }
+            if (@file_put_contents(__DIR__ . '/' . $f, $c) === false) {
+                $allOk = false;
+                break;
+            }
         }
-        echo json_encode(['success'=>true, 'message'=>'系统文件已强制修复']); exit;
+
+        echo json_encode([
+            'success' => $allOk,
+            'message' => $allOk ? '系统文件已强制修复' : '部分系统文件更新失败，请检查网络或文件权限'
+        ]);
+        exit;
     }
 }
 ?>

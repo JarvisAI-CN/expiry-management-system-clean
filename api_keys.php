@@ -173,9 +173,6 @@ $apiKeys = getApiKeys();
                                         </td>
                                         <td>
                                             <div class="btn-group btn-group-sm">
-                                                <button class="btn btn-outline-primary" onclick="copyApiKey('<?php echo htmlspecialchars($key['api_key']); ?>')">
-                                                    <i class="bi bi-clipboard"></i> 复制
-                                                </button>
                                                 <button class="btn btn-outline-warning" onclick="toggleKey(<?php echo $key['id']; ?>)">
                                                     <i class="bi bi-power"></i>
                                                 </button>
@@ -255,12 +252,6 @@ $apiKeys = getApiKeys();
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        function copyApiKey(apiKey) {
-            navigator.clipboard.writeText(apiKey).then(() => {
-                alert('API密钥已复制到剪贴板！');
-            });
-        }
-
         function toggleKey(keyId) {
             if (confirm('确定要切换此密钥的状态吗？')) {
                 const form = document.createElement('form');

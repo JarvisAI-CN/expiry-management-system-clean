@@ -10,7 +10,16 @@
  * 生成随机API密钥
  */
 function generateApiKey() {
-    return hash('sha256', uniqid('', true) . random_bytes(32) . microtime(true));
+    // 生成一段高熵随机明文key，返回给用户使用
+    return bin2hex(random_bytes(32)); // 64位十六进制字符串
+}
+
+/**
+ * 根据明文key生成存储用哈希
+ */
+function hashApiKeyForStorage($plainKey) {
+    // 如需更强可以加盐或使用更复杂方案，这里先做简单但正确的实现
+    return hash('sha256', $plainKey);
 }
 
 /**
@@ -22,10 +31,12 @@ function createApiKey($name, $createdBy, $expiresAt = null) {
         return ['success' => false, 'message' => '数据库连接失败'];
     }
 
-    $apiKey = generateApiKey();
+    // 生成明文key（只在创建时返回给用户一次）
+    $apiKeyPlain = generateApiKey();
+    $apiKeyHash = hashApiKeyForStorage($apiKeyPlain);
 
-    $stmt = $conn->prepare("INSERT INTO api_keys (name, api_key, created_by, expires_at) VALUES (?, ?, ?, ?)");
-    $stmt->bind_param("ssis", $name, $apiKey, $createdBy, $expiresAt);
+    $stmt = $conn->prepare("INSERT INTO api_keys (name, api_key_hash, created_by, expires_at) VALUES (?, ?, ?, ?)");
+    $stmt->bind_param("ssis", $name, $apiKeyHash, $createdBy, $expiresAt);
 
     if ($stmt->execute()) {
         $keyId = $conn->insert_id;
@@ -36,7 +47,7 @@ function createApiKey($name, $createdBy, $expiresAt = null) {
         return [
             'success' => true,
             'key_id' => $keyId,
-            'api_key' => $apiKey,
+            'api_key' => $apiKeyPlain,
             'message' => 'API密钥创建成功'
         ];
     }
@@ -53,7 +64,7 @@ function getApiKeys($userId = null) {
         return [];
     }
 
-    $sql = "SELECT ak.*, u.username as creator_name
+    $sql = "SELECT ak.id, ak.name, ak.is_active, ak.created_at, ak.last_used_at, ak.created_by, u.username as creator_name
             FROM api_keys ak
             LEFT JOIN users u ON ak.created_by = u.id";
 
@@ -67,8 +78,8 @@ function getApiKeys($userId = null) {
 
     $keys = [];
     while ($row = $result->fetch_assoc()) {
-        // 隐藏完整密钥，只显示前8位
-        $row['api_key_masked'] = substr($row['api_key'], 0, 8) . '...' . substr($row['api_key'], -8);
+        // 已不再存储明文api_key，这里仅展示占位信息
+        $row['api_key_masked'] = '********-********';
         $keys[] = $row;
     }
 

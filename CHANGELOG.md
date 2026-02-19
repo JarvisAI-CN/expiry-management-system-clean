@@ -1,5 +1,22 @@
 # 更新日志 (CHANGELOG)
 
+## [v2.8.2] - 2026-02-19
+
+### 🔒 安全修复
+
+- 强化在线升级接口安全：
+  - `index.php?api=check_upgrade` 与 `index.php?api=execute_upgrade` 现均必须在登录状态下、通过 `checkAuth()` 后才能调用，未登录访问将返回统一 JSON 错误：`{"success": false, "message": "请先登录"}`。
+  - 升级与强制修复仅从官方 GitHub HTTPS 源拉取文件：`https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/`，彻底移除 HTTP 明文本机回退源。
+  - 升级拉取/写入任意文件失败时，会返回 `success: false` 及错误提示，不再静默失败。
+- 修复 `submit_session` SQL 注入风险：
+  - 对前端盘点会话 `session_id` 进行严格校验，仅允许 `[A-Za-z0-9_-]` 且长度 1–64。
+  - 使用预处理语句完成 `SELECT COUNT(*) FROM batches WHERE session_id = ?` 与 `INSERT INTO inventory_sessions (session_key, user_id, item_count) VALUES (?, ?, ?)`，杜绝字符串拼接 SQL。
+- API 密钥改用哈希存储：
+  - 新建密钥时生成 32 字节随机数（hex 后 64 字符）作为明文 key，仅在创建成功响应中返回一次。
+  - 数据库仅存储 `sha256(明文 key)` 至 `api_key_hash` 字段，原 `api_key` 字段标记为兼容字段，不再参与校验。
+  - `api.php` 在校验时从 Authorization Bearer 或参数中取明文 key，计算 SHA256 后按 `api_key_hash = ? AND is_active = 1` 检查。
+  - Web 管理界面不再显示或复制完整明文 key，仅展示遮罩占位文本（如 `********-********`），避免后台泄露。
+
 ## [v2.8.1] - 2026-02-18
 
 ### 🆕 新增功能

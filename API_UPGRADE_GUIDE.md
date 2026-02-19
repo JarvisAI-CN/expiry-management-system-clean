@@ -284,7 +284,7 @@ pip3 install requests
 - ✨ 新增Python API客户端
 - ✨ 新增API访问日志功能
 - 📝 完善API使用文档
-- 🔒 API密钥SHA256哈希存储
+- 🔒 API密钥按 SHA256 哈希存储在 `api_keys.api_key_hash` 字段
 - 🔒 Bearer Token认证
 
 ---

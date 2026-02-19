@@ -180,11 +180,11 @@ ORDER BY b.expiry_date;
 - [ ] 远程更新只使用 **HTTPS** 源（GitHub / 自建 HTTPS），不再使用 HTTP 明文 `FALLBACK_URL`
 - [ ] 远程拉取的 PHP 文件有基本完整性校验（如固定 hash 或签名文件），防止被中间人篡改
 
-### API 安全（2.8.1 新增 API 系统）
-- [ ] API 密钥在数据库中按 **哈希（如 SHA256）存储** 或至少经过加密，不直接保存明文
-- [ ] `api.php` 中的密钥验证逻辑与实际存储方式一致（避免“文档说哈希，代码查明文”的错配）
-- [ ] API 仅通过 `Authorization: Bearer <key>` 传递密钥，**禁止在 URL 中使用 `?api_key=` 传参（避免日志泄露密钥）**
-- [ ] CORS 策略限制为可信前端域名（生产环境不要使用 `Access-Control-Allow-Origin: *`）
+### API 安全（2.8.2 起）
+- [ ] API 密钥在数据库中按 **SHA256 哈希存储**，使用 `api_keys.api_key_hash` 字段，不再依赖明文字段
+- [ ] `api.php` 在内存中对传入明文 key 做 `sha256` 后，以 `api_key_hash = ? AND is_active = 1` 进行预处理查询
+- [ ] API 推荐通过 `Authorization: Bearer <key>` 传递密钥；如为兼容临时保留 `?api_key=`，需确保访问日志不会泄露敏感信息
+- [ ] CORS 策略尽量限制为可信前端域名（生产环境不要长期使用 `Access-Control-Allow-Origin: *`）
 - [ ] 所有 API 端点都有清晰的限流方案或监控（防止被暴力调用）
 
 ### SQL 安全（重点检查 2.8.x 新增功能）

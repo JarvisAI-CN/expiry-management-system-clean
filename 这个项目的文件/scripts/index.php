@@ -3,15 +3,14 @@
  * ========================================
  * 保质期管理系统 - 综合管理后台
  * 文件名: index.php
- * 版本: v2.7.3-alpha
+ * 版本: v2.8.2
  * 创建日期: 2026-02-15
  * ========================================
  */
 
 // 升级配置
-define('APP_VERSION', '2.7.3-alpha');
+define('APP_VERSION', '2.8.2');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
-define('FALLBACK_URL', 'http://150.109.204.23:8888/');
 
 session_start();
 require_once 'db.php';
@@ -62,24 +61,38 @@ if (isset($_GET['api'])) {
     if ($action === 'logout') { session_destroy(); echo json_encode(['success'=>true]); exit; }
     
     if ($action === 'check_upgrade') {
-        $latest = @file_get_contents(UPDATE_URL . 'VERSION.txt');
-        if (!$latest) $latest = @file_get_contents(FALLBACK_URL . 'VERSION.txt');
-        if ($latest) {
+        $ctx = stream_context_create(['http' => ['timeout' => 10]]);
+        $latest = @file_get_contents(UPDATE_URL . 'VERSION.txt', false, $ctx);
+        if ($latest !== false) {
             $latest = trim($latest);
-            echo json_encode(['success'=>true, 'current'=>APP_VERSION, 'latest'=>$latest, 'has_update'=>version_compare($latest, APP_VERSION, '>')]);
-        } else { echo json_encode(['success'=>false]); }
+            echo json_encode([
+                'success'   => true,
+                'current'   => APP_VERSION,
+                'latest'    => $latest,
+                'has_update'=> version_compare($latest, APP_VERSION, '>')
+            ]);
+        } else {
+            echo json_encode(['success'=>false, 'message' => '无法从官方更新源获取版本信息']);
+        }
         exit;
     }
 
     if ($action === 'execute_upgrade') {
         $files = ['index.php', 'db.php', 'install.php', 'admin.php', 'VERSION.txt'];
+        $ctx = stream_context_create(['http'=>['timeout'=>10]]);
+        $allOk = true;
         foreach ($files as $f) {
-            $ctx = stream_context_create(['http'=>['timeout'=>10]]);
             $c = @file_get_contents(UPDATE_URL . $f, false, $ctx);
-            if (!$c) $c = @file_get_contents(FALLBACK_URL . $f);
-            if ($c) @file_put_contents(__DIR__ . '/' . $f, $c);
+            if ($c === false) {
+                $allOk = false;
+                break;
+            }
+            if (@file_put_contents(__DIR__ . '/' . $f, $c) === false) {
+                $allOk = false;
+                break;
+            }
         }
-        echo json_encode(['success'=>true]); exit;
+        echo json_encode(['success'=>$allOk]); exit;
     }
 
     checkAuth();
@@ -137,10 +150,27 @@ if (isset($_GET['api'])) {
     }
     if ($action === 'submit_session') {
         $data = json_decode(file_get_contents('php://input'), true);
-        $sid = $data['session_id']; $res = $conn->query("SELECT COUNT(*) as count FROM batches WHERE session_id = '$sid'");
-        $count = $res->fetch_assoc()['count'];
-        $conn->query("INSERT INTO inventory_sessions (session_key, user_id, item_count) VALUES ('$sid', {$_SESSION['user_id']}, $count)");
-        echo json_encode(['success'=>true]); exit;
+        $sid = $data['session_id'] ?? '';
+
+        if (!$sid || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $sid)) {
+            echo json_encode(['success' => false, 'message' => '非法的session_id']);
+            exit;
+        }
+
+        $stmtCount = $conn->prepare("SELECT COUNT(*) AS count FROM batches WHERE session_id = ?");
+        $stmtCount->bind_param("s", $sid);
+        $stmtCount->execute();
+        $res = $stmtCount->get_result();
+        $row = $res->fetch_assoc();
+        $count = (int)($row['count'] ?? 0);
+
+        $uid = $_SESSION['user_id'] ?? 0;
+        $stmtInsert = $conn->prepare("INSERT INTO inventory_sessions (session_key, user_id, item_count) VALUES (?, ?, ?)");
+        $stmtInsert->bind_param("sii", $sid, $uid, $count);
+        $ok = $stmtInsert->execute();
+
+        echo json_encode(['success' => $ok]);
+        exit;
     }
     if ($action === 'get_past_sessions') {
         $res = $conn->query("SELECT * FROM inventory_sessions ORDER BY created_at DESC");
