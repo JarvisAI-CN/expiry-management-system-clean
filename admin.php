@@ -8,6 +8,7 @@
  */
 session_start();
 require_once 'db.php';
+require_once 'api_key_manager.php';
 
 // 严格权限检查
 if (!isset($_SESSION['user_id'])) { 
@@ -20,7 +21,7 @@ if (!isset($_SESSION['user_id'])) {
     exit; 
 }
 
-define('APP_VERSION', '2.8.2');
+define('APP_VERSION', '2.8.5');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 
 // 处理管理端 API 请求
@@ -79,8 +80,39 @@ if (isset($_GET['api'])) {
         echo json_encode(['success'=>true]); exit;
     }
 
-    // AI 测试接口
-    if ($action === 'test_ai') {
+    // 5. API密钥管理
+    if ($action === 'get_api_keys') {
+        $keys = getApiKeys();
+        echo json_encode(['success'=>true, 'keys'=>$keys]); exit;
+    }
+    if ($action === 'create_api_key') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $name = trim($data['name'] ?? '');
+        $expiresAt = !empty($data['expires_at']) ? $data['expires_at'] : null;
+        $userId = $_SESSION['user_id'];
+
+        if (empty($name)) {
+            echo json_encode(['success'=>false, 'message'=>'请输入密钥名称']);
+            exit;
+        }
+
+        $result = createApiKey($name, $userId, $expiresAt);
+        echo json_encode($result); exit;
+    }
+    if ($action === 'delete_api_key') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $keyId = $data['id'] ?? 0;
+        $userId = $_SESSION['user_id'];
+        echo json_encode(deleteApiKey($keyId, $userId)); exit;
+    }
+    if ($action === 'toggle_api_key') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $keyId = $data['id'] ?? 0;
+        echo json_encode(toggleApiKeyStatus($keyId)); exit;
+    }
+
+    // 6. 强制修复升级（仅允许从官方 GitHub 源获取）
+    if ($action === 'force_repair') {
         $data = json_decode(file_get_contents('php://input'), true);
         $url = rtrim($data['ai_api_url'] ?? '', '/');
         $key = $data['ai_api_key'] ?? '';
@@ -150,6 +182,7 @@ if (isset($_GET['api'])) {
                     <button class="nav-link active text-start" data-bs-toggle="pill" data-bs-target="#tab-products"><i class="bi bi-box me-2"></i>商品管理</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-cats"><i class="bi bi-grid me-2"></i>分类规则</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-users"><i class="bi bi-people me-2"></i>用户管理</button>
+                    <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-apikeys"><i class="bi bi-key me-2"></i>API密钥管理</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-ai"><i class="bi bi-robot me-2"></i>AI 配置</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-system"><i class="bi bi-tools me-2"></i>系统维护</button>
                     <hr><a href="index.php" class="nav-link text-start"><i class="bi bi-arrow-left me-2"></i>返回前台</a>
@@ -172,6 +205,31 @@ if (isset($_GET['api'])) {
                         <div class="d-flex justify-content-between mb-4"><h4>管理员账号</h4></div>
                         <div class="admin-card p-3"><table class="table"><thead><tr><th>用户名</th><th>创建时间</th></tr></thead><tbody id="uListBody"></tbody></table><hr><h5>添加账号</h5><form id="addUserForm" class="row g-2"><div class="col-5"><input type="text" id="nU" class="form-control" placeholder="用户名"></div><div class="col-5"><input type="password" id="nP" class="form-control" placeholder="密码"></div><div class="col-2"><button class="btn btn-success w-100">添加</button></div></form></div>
                     </div>
+                    <div class="tab-pane fade" id="tab-apikeys">
+                        <div class="d-flex justify-content-between mb-4">
+                            <h4>API密钥管理</h4>
+                            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createKeyModal"><i class="bi bi-plus-circle me-1"></i>创建密钥</button>
+                        </div>
+                        <div class="admin-card p-3">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th>名称</th>
+                                            <th>创建者</th>
+                                            <th>创建时间</th>
+                                            <th>最后使用</th>
+                                            <th>状态</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="apiKeyListBody">
+                                        <tr><td colspan="6" class="text-center text-muted">加载中...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
                     <div class="tab-pane fade" id="tab-ai">
                         <div class="d-flex justify-content-between mb-4"><h4>AI 接口设置</h4></div>
                         <div class="admin-card p-4 mx-auto" style="max-width: 600px;"><form id="aiForm"><div class="mb-3"><label class="form-label">API URL</label><input type="text" id="ai_url" class="form-control" placeholder="https://api.openai.com/v1"></div><div class="mb-3"><label class="form-label">API Key</label><input type="password" id="ai_key" class="form-control"></div><div class="mb-3"><label class="form-label">Model</label><input type="text" id="ai_model" class="form-control" placeholder="gpt-4o"></div><div class="d-flex gap-2"><button class="btn btn-primary flex-grow-1">保存设置</button><button type="button" id="testAi" class="btn btn-outline-info" style="min-width: 150px;">测试连接</button></div></form></div>
@@ -188,10 +246,67 @@ if (isset($_GET['api'])) {
             </div>
         </div>
     </div>
+
+    <!-- 创建API密钥Modal -->
+    <div class="modal fade" id="createKeyModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">创建API密钥</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createKeyForm">
+                        <div class="mb-3">
+                            <label class="form-label">密钥名称</label>
+                            <input type="text" id="keyName" class="form-control" placeholder="例如：移动端APP" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">过期时间（可选）</label>
+                            <input type="date" id="keyExpires" class="form-control">
+                            <small class="text-muted">留空表示永不过期</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="createApiKey()">创建</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 显示新创建的API密钥Modal -->
+    <div class="modal fade" id="showKeyModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title">✅ API密钥创建成功</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning">
+                        <strong>⚠️ 重要提示：</strong>请立即复制并保存此密钥，关闭此窗口后将无法再次查看！
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">您的API密钥：</label>
+                        <div class="input-group">
+                            <input type="text" id="newApiKeyDisplay" class="form-control font-monospace" readonly>
+                            <button class="btn btn-outline-secondary" onclick="copyApiKey()">复制</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">我已保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            loadProducts(); loadCats(); loadUsers(); loadSettings();
+            loadProducts(); loadCats(); loadUsers(); loadSettings(); loadApiKeys();
             document.getElementById('catForm').addEventListener('submit', async (e)=>{
                 e.preventDefault(); const rule = JSON.stringify({need_buffer: true, scrap_on_removal: true});
                 await fetch('admin.php?api=save_category', {method:'POST', body:JSON.stringify({name:document.getElementById('catName').value, type:document.getElementById('catType').value, rule})});
@@ -237,6 +352,114 @@ if (isset($_GET['api'])) {
         async function loadSettings() {
             const res = await fetch('admin.php?api=get_settings'); const d = await res.json();
             if(d.success) { document.getElementById('ai_url').value=d.settings.ai_api_url; document.getElementById('ai_key').value=d.settings.ai_api_key; document.getElementById('ai_model').value=d.settings.ai_model; }
+        }
+
+        // API密钥管理
+        async function loadApiKeys() {
+            const res = await fetch('admin.php?api=get_api_keys');
+            const d = await res.json();
+            if (d.success) {
+                const tbody = document.getElementById('apiKeyListBody');
+                if (d.keys.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无API密钥</td></tr>';
+                } else {
+                    tbody.innerHTML = d.keys.map(k => `
+                        <tr>
+                            <td><strong>${k.name}</strong><br><small class="text-muted">${k.api_key_masked}</small></td>
+                            <td>${k.creator_name || '-'}</td>
+                            <td><small>${formatDate(k.created_at)}</small></td>
+                            <td><small>${k.last_used_at ? formatDate(k.last_used_at) : '从未使用'}</small></td>
+                            <td><span class="badge ${k.is_active ? 'bg-success' : 'bg-secondary'}">${k.is_active ? '启用' : '禁用'}</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="toggleApiKey(${k.id})">${k.is_active ? '禁用' : '启用'}</button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="deleteApiKey(${k.id})">删除</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+            }
+        }
+
+        async function createApiKey() {
+            const name = document.getElementById('keyName').value.trim();
+            const expiresAt = document.getElementById('keyExpires').value || null;
+
+            if (!name) {
+                alert('请输入密钥名称');
+                return;
+            }
+
+            const res = await fetch('admin.php?api=create_api_key', {
+                method: 'POST',
+                body: JSON.stringify({ name, expires_at: expiresAt })
+            });
+            const d = await res.json();
+
+            if (d.success) {
+                // 关闭创建modal
+                const createModal = bootstrap.Modal.getInstance(document.getElementById('createKeyModal'));
+                createModal.hide();
+
+                // 显示新密钥
+                document.getElementById('newApiKeyDisplay').value = d.api_key;
+                const showModal = new bootstrap.Modal(document.getElementById('showKeyModal'));
+                showModal.show();
+
+                // 清空表单并重新加载列表
+                document.getElementById('createKeyForm').reset();
+                loadApiKeys();
+            } else {
+                alert('创建失败: ' + d.message);
+            }
+        }
+
+        function copyApiKey() {
+            const input = document.getElementById('newApiKeyDisplay');
+            input.select();
+            document.execCommand('copy');
+            alert('✅ 已复制到剪贴板');
+        }
+
+        async function deleteApiKey(id) {
+            if (!confirm('确定删除此API密钥吗？此操作不可恢复！')) return;
+
+            const res = await fetch('admin.php?api=delete_api_key', {
+                method: 'POST',
+                body: JSON.stringify({ id })
+            });
+            const d = await res.json();
+
+            if (d.success) {
+                loadApiKeys();
+            } else {
+                alert('删除失败: ' + d.message);
+            }
+        }
+
+        async function toggleApiKey(id) {
+            const res = await fetch('admin.php?api=toggle_api_key', {
+                method: 'POST',
+                body: JSON.stringify({ id })
+            });
+            const d = await res.json();
+
+            if (d.success) {
+                loadApiKeys();
+            } else {
+                alert('操作失败: ' + d.message);
+            }
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
         }
     </script>
 </body>
