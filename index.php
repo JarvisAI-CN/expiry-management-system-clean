@@ -577,30 +577,42 @@ if (isset($_GET['api'])) {
                 refreshHealth();
             });
         });
-        async function searchSKU(sku) {
-            const res = await fetch('index.php?api=get_product&sku='+sku);
-            const d = await res.json();
-            document.getElementById('productForm').reset();
-            document.getElementById('batchesContainer').innerHTML='';
-            document.getElementById('sku').value = sku;
-            const fields = ['categoryId','productName','removalBuffer'];
-
-            // 解析二维码日期格式
+        async function searchSKU(qrCode) {
+            // 从二维码中提取SKU
+            let sku = qrCode;
             let expiryDateFromQR = null;
-            if (sku.includes('#')) {
-                const parts = sku.split('#');
+
+            // 解析二维码格式
+            if (qrCode.includes('#')) {
+                const parts = qrCode.split('#');
                 if (parts.length >= 3) {
-                    // 格式: 00 + SKU + 生产日期 + 到期日期
-                    // 或: SKU + 生产日期 + 到期日期
-                    let expiryPart = parts[parts.length - 1]; // 最后一个是到期日期
-                    if (expiryPart.length === 8 && /^\d+$/.test(expiryPart)) {
-                        const year = expiryPart.substring(0, 4);
-                        const month = expiryPart.substring(4, 6);
-                        const day = expiryPart.substring(6, 8);
+                    // 格式: 00 + SKU(8位) + 生产日期 + 到期日期
+                    let skuPart = parts[0]; // 第一部分是 00 + SKU
+                    let prodDatePart = parts[1]; // 第二部分是生产日期
+                    let expiryDatePart = parts[2]; // 第三部分是到期日期
+
+                    // 去掉前缀 "00"，提取纯SKU
+                    if (skuPart.startsWith('00')) {
+                        sku = skuPart.substring(2);
+                    }
+
+                    // 解析到期日期
+                    if (expiryDatePart.length === 8 && /^\d+$/.test(expiryDatePart)) {
+                        const year = expiryDatePart.substring(0, 4);
+                        const month = expiryDatePart.substring(4, 6);
+                        const day = expiryDatePart.substring(6, 8);
                         expiryDateFromQR = `${year}-${month}-${day}`;
                     }
                 }
             }
+
+            // 查询商品信息
+            const res = await fetch('index.php?api=get_product&sku='+encodeURIComponent(sku));
+            const d = await res.json();
+            document.getElementById('productForm').reset();
+            document.getElementById('batchesContainer').innerHTML='';
+            document.getElementById('sku').value = qrCode; // 显示原始二维码
+            const fields = ['categoryId','productName','removalBuffer'];
 
             if(d.exists) {
                 document.getElementById('productName').value=d.product.name;
