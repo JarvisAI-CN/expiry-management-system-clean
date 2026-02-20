@@ -359,6 +359,71 @@ if (isset($_GET['api'])) {
         exit;
     }
 
+    if ($action === 'add_todos_to_products') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $ids = $data['ids'] ?? [];
+
+        if (empty($ids)) {
+            echo json_encode(['success'=>false, 'message'=>'未选择任何SKU']); exit;
+        }
+
+        // 获取要添加的SKU数据
+        $ids_str = implode(',', array_fill(0, count($ids), '?'));
+        $res = $conn->query("SELECT sku, name, category_id, inventory_cycle FROM sku_todos WHERE id IN ($ids_str)");
+        
+        $added = 0;
+        $skipped = 0;
+        $errors = [];
+
+        while ($todo = $res->fetch_assoc()) {
+            $sku = $todo['sku'];
+            $name = $todo['name'];
+            $category_id = $todo['category_id'] ?? 0;
+            $inventory_cycle = $todo['inventory_cycle'] ?? 'none';
+
+            // 检查是否已存在
+            $check = $conn->prepare("SELECT id FROM products WHERE sku = ?");
+            $check->bind_param("s", $sku);
+            $check->execute();
+            
+            if ($check->get_result()->num_rows > 0) {
+                // 已存在，更新
+                $update = $conn->prepare("UPDATE products SET name = ?, category_id = ?, inventory_cycle = ? WHERE sku = ?");
+                $update->bind_param("siss", $name, $category_id, $inventory_cycle, $sku);
+                if ($update->execute()) {
+                    $skipped++;
+                } else {
+                    $errors[] = "SKU $sku 更新失败";
+                }
+            } else {
+                // 不存在，插入
+                $insert = $conn->prepare("INSERT INTO products (sku, name, category_id, inventory_cycle) VALUES (?, ?, ?, ?)");
+                $insert->bind_param("ssis", $sku, $name, $category_id, $inventory_cycle);
+                if ($insert->execute()) {
+                    $added++;
+                } else {
+                    $errors[] = "SKU $sku 插入失败";
+                }
+            }
+        }
+
+        // 更新sku_todos状态为已完成
+        $update = $conn->prepare("UPDATE sku_todos SET status = 'done', updated_at = NOW() WHERE id IN ($ids_str)");
+        foreach ($ids as $id) {
+            $update->bind_param("i", $id);
+            $update->execute();
+        }
+
+        echo json_encode([
+            'success'=>true,
+            'message'=>"已添加 $added 个新商品，更新 $skipped 个已有商品",
+            'added'=>$added,
+            'skipped'=>$skipped,
+            'errors'=>$errors
+        ]);
+        exit;
+    }
+
     if ($action === 'get_upload_tasks') {
         $res = $conn->query("SELECT * FROM sku_upload_tasks ORDER BY created_at DESC LIMIT 20");
         $list = [];
@@ -697,12 +762,12 @@ if (isset($_GET['api'])) {
                             
                             <!-- 批量设置区域 -->
                             <div class="row g-2 mb-3">
-                                <div class="col-4">
+                                <div class="col-3">
                                     <select id="batchCategory" class="form-select form-select-sm">
                                         <option value="">📦 绑定系统分类...</option>
                                     </select>
                                 </div>
-                                <div class="col-4">
+                                <div class="col-3">
                                     <select id="batchCycle" class="form-select form-select-sm">
                                         <option value="">⏰ 设置盘点频次...</option>
                                         <option value="weekly">每周</option>
@@ -712,8 +777,11 @@ if (isset($_GET['api'])) {
                                         <option value="none">🔴 不盘点</option>
                                     </select>
                                 </div>
-                                <div class="col-4">
-                                    <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">✅ 应用批量设置</button>
+                                <div class="col-3">
+                                    <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">✅ 应用设置</button>
+                                </div>
+                                <div class="col-3">
+                                    <button id="addToProductsBtn" class="btn btn-sm btn-primary w-100">➕ 添加到商品管理</button>
                                 </div>
                             </div>
                                 <table class="table table-hover">
@@ -998,6 +1066,39 @@ if (isset($_GET['api'])) {
                 }
             } catch (e) {
                 alert('批量更新失败');
+            }
+        });
+
+        // 添加到商品管理
+        document.getElementById('addToProductsBtn')?.addEventListener('click', async () => {
+            const checkboxes = document.querySelectorAll('.sku-checkbox:checked');
+            if (!checkboxes.length) {
+                alert('请选择要添加的SKU');
+                return;
+            }
+
+            const ids = Array.from(checkboxes).map(cb => cb.dataset.id);
+
+            if (!confirm(`确定要将选中的 ${ids.length} 个SKU添加到商品管理吗？`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch('admin.php?api=add_todos_to_products', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids })
+                });
+                const d = await res.json();
+
+                if (d.success) {
+                    alert(`${d.message}\n\n这些商品现在可以在"商品管理"菜单中看到了！`);
+                    loadSkuTodos();  // 刷新列表，状态会变为"已完成"
+                } else {
+                    alert(d.message);
+                }
+            } catch (e) {
+                alert('添加失败');
             }
         });
 
