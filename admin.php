@@ -62,20 +62,147 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         exit;
     }
 
-    // 创建上传任务记录
-    $stmt = $conn->prepare("INSERT INTO sku_upload_tasks (filename, status) VALUES (?, 'pending')");
-    $stmt->bind_param("s", $filename);
-    $stmt->execute();
-    $task_id = $conn->insert_id;
+    // 同步处理文件（立即解析，不使用exec）
+    try {
+        // 根据文件扩展名选择解析方式
+        $fileExt = strtolower(pathinfo($filepath, PATHINFO_EXTENSION));
 
-    // 触发异步处理
-    $php_path = exec('which php8.3');
-    $script_path = __DIR__ . '/process_sku_upload.php';
-    exec("$php_path $script_path $task_id > /dev/null 2>&1 &");
+        if ($fileExt === 'csv') {
+            // 解析CSV文件
+            $handle = fopen($filepath, 'r');
+            if (!$handle) {
+                throw new Exception("无法打开文件");
+            }
 
-    $result = json_encode(['success'=>true, 'task_id'=>$task_id, 'message'=>'文件上传成功', 'filename'=>$filename]);
-    header("Location: admin.php?page=sku&upload_result=" . urlencode($result));
-    exit;
+            $uploaded_skus = [];
+            $row_count = 0;
+
+            while (($data = fgetcsv($handle, 1000, ',')) !== FALSE) {
+                $row_count++;
+
+                if (empty($data[0])) continue;
+
+                if ($row_count === 1 && !preg_match('/^\d+$/', $data[0])) {
+                    continue;
+                }
+
+                $sku = trim($data[0]);
+                $name = trim($data[1] ?? '');
+
+                if ($sku) {
+                    $uploaded_skus[$sku] = $name;
+                }
+            }
+
+            fclose($handle);
+
+        } elseif ($fileExt === 'xlsx' || $fileExt === 'xls') {
+            // 解析Excel文件（需要扩展）
+            if (!class_exists('ZipArchive')) {
+                throw new Exception("Excel解析需要PHP扩展（zip），请联系管理员安装");
+            }
+
+            require_once __DIR__ . '/xlsx_parser.php';
+            $rows = parseXlsxFile($filepath);
+
+            $uploaded_skus = [];
+            $row_count = 0;
+
+            foreach ($rows as $rowData) {
+                $row_count++;
+
+                if (empty($rowData[0])) continue;
+
+                if ($row_count === 1 && !preg_match('/^\d+$/', $rowData[0])) {
+                    continue;
+                }
+
+                $sku = trim($rowData[0]);
+                $name = trim($rowData[1] ?? '');
+
+                if ($sku) {
+                    $uploaded_skus[$sku] = $name;
+                }
+            }
+
+        } else {
+            throw new Exception("不支持的文件格式：$fileExt");
+        }
+
+        // 对比数据库
+        $new_skus = [];
+        $missing_skus = [];
+        $duplicate_skus = [];
+
+        // 检查新增和重复SKU
+        $checkStmt = $conn->prepare("SELECT sku FROM products WHERE sku = ?");
+        foreach ($uploaded_skus as $sku => $name) {
+            $checkStmt->bind_param("s", $sku);
+            $checkStmt->execute();
+            $exists = $checkStmt->get_result()->num_rows > 0;
+
+            if (!$exists) {
+                $new_skus[] = ['sku' => $sku, 'name' => $name];
+            }
+        }
+
+        // 检查缺失SKU（数据库中有但文件中没有）
+        $allDbRes = $conn->query("SELECT sku, name FROM products");
+        $allDbSkus = [];
+        while ($row = $allDbRes->fetch_assoc()) {
+            $allDbSkus[$row['sku']] = $row['name'];
+        }
+
+        foreach ($allDbSkus as $sku => $name) {
+            if (!isset($uploaded_skus[$sku])) {
+                $missing_skus[] = ['sku' => $sku, 'name' => $name];
+            }
+        }
+
+        // 保存到sku_todos表
+        $clearStmt = $conn->prepare("DELETE FROM sku_todos WHERE source_file = ?");
+        $clearStmt->bind_param("s", $filename);
+        $clearStmt->execute();
+
+        $insertStmt = $conn->prepare("INSERT INTO sku_todos (sku, name, status, source_file) VALUES (?, ?, 'pending', ?)");
+        foreach ($new_skus as $item) {
+            $insertStmt->bind_param("sss", $item['sku'], $item['name'], $filename);
+            $insertStmt->execute();
+        }
+        foreach ($missing_skus as $item) {
+            $insertStmt->bind_param("sss", $item['sku'], $item['name'], $filename);
+            $insertStmt->execute();
+        }
+
+        // 更新任务状态
+        $resultData = json_encode([
+            'total_rows' => $row_count,
+            'new_skus' => count($new_skus),
+            'missing_skus' => count($missing_skus),
+            'duplicate_skus' => count($duplicate_skus)
+        ]);
+
+        $updateStmt = $conn->prepare("UPDATE sku_upload_tasks SET status = 'completed', total_rows = ?, new_skus = ?, missing_skus = ?, duplicate_skus = ?, result_data = ? WHERE id = ?");
+        $newCount = count($new_skus);
+        $missingCount = count($missing_skus);
+        $dupCount = count($duplicate_skus);
+        $updateStmt->bind_param("iiiisi", $row_count, $newCount, $missingCount, $dupCount, $resultData, $task_id);
+        $updateStmt->execute();
+
+        $successResult = json_encode([
+            'success'=>true,
+            'message'=>"✅ 处理完成！新增{$newCount}个，缺失{$missingCount}个",
+            'filename'=>$filename,
+            'task'=>['filename'=>$filename, 'result_data'=>$resultData]
+        ]);
+        header("Location: admin.php?page=sku&upload_result=" . urlencode($successResult));
+        exit;
+
+    } catch (Exception $e) {
+        $error = json_encode(['success'=>false, 'message'=>"处理失败: " . $e->getMessage()]);
+        header("Location: admin.php?page=sku&upload_result=" . urlencode($error));
+        exit;
+    }
 }
 
 define('APP_VERSION', '2.7.3-alpha');
