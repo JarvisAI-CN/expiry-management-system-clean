@@ -588,7 +588,7 @@ if (isset($_GET['api'])) {
             console.log('扫码内容:', qrCode);
 
             // 格式1: 星巴克URL格式
-            // https://artwork.starbucks.com.cn/mobile/gtin/xxx/cii1/00+SKU+生产日期&到期日期
+            // https://artwork.starbucks.com.cn/mobile/gtin/xxx/cii1/00+SKU+生产日期&生产日期&到期日期
             if (qrCode.includes('artwork.starbucks.com.cn')) {
                 try {
                     const url = new URL(qrCode);
@@ -596,21 +596,19 @@ if (isset($_GET['api'])) {
                     const ciiIndex = pathParts.indexOf('cii1');
 
                     if (ciiIndex !== -1 && ciiIndex + 1 < pathParts.length) {
-                        let ciiData = pathParts[ciiIndex + 1]; // 00+SKU+生产日期&到期日期
+                        let ciiData = pathParts[ciiIndex + 1]; // 00+SKU+生产日期&生产日期&到期日期
 
-                        // 分离&前后的部分
-                        const ampIndex = ciiData.indexOf('&');
-                        if (ampIndex !== -1) {
-                            const datePart = ciiData.substring(ampIndex + 1); // 20260924
-                            ciiData = ciiData.substring(0, ampIndex); // 00+SKU+生产日期
+                        // 分离所有&后的部分（可能有多个日期）
+                        const ampParts = ciiData.split('&');
+                        ciiData = ampParts[0]; // 第一部分：00+SKU+生产日期
 
-                            // 解析到期日期（8位数字）
-                            if (datePart.length === 8 && /^\d+$/.test(datePart)) {
-                                const year = datePart.substring(0, 4);
-                                const month = datePart.substring(4, 6);
-                                const day = datePart.substring(6, 8);
-                                expiryDateFromQR = `${year}-${month}-${day}`;
-                            }
+                        // 提取最后一个日期（到期日期）
+                        const lastPart = ampParts[ampParts.length - 1];
+                        if (lastPart.length === 8 && /^\d+$/.test(lastPart)) {
+                            const year = lastPart.substring(0, 4);
+                            const month = lastPart.substring(4, 6);
+                            const day = lastPart.substring(6, 8);
+                            expiryDateFromQR = `${year}-${month}-${day}`;
                         }
 
                         // 去掉00前缀
