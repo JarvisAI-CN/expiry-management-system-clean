@@ -590,36 +590,43 @@ if (isset($_GET['api'])) {
             // 格式1: 星巴克URL格式
             // https://artwork.starbucks.com.cn/mobile/gtin/xxx/cii1/00+SKU+生产日期&到期日期
             if (qrCode.includes('artwork.starbucks.com.cn')) {
-                const url = new URL(qrCode);
-                const pathParts = url.pathname.split('/');
-                const ciiIndex = pathParts.indexOf('cii1');
+                try {
+                    const url = new URL(qrCode);
+                    const pathParts = url.pathname.split('/');
+                    const ciiIndex = pathParts.indexOf('cii1');
 
-                if (ciiIndex !== -1 && ciiIndex + 1 < pathParts.length) {
-                    const ciiData = pathParts[ciiIndex + 1]; // 00+SKU+生产日期
+                    if (ciiIndex !== -1 && ciiIndex + 1 < pathParts.length) {
+                        let ciiData = pathParts[ciiIndex + 1]; // 00+SKU+生产日期&到期日期
 
-                    // 去掉00前缀
-                    let dataPart = ciiData;
-                    if (dataPart.startsWith('00')) {
-                        dataPart = dataPart.substring(2);
+                        // 分离&前后的部分
+                        const ampIndex = ciiData.indexOf('&');
+                        if (ampIndex !== -1) {
+                            const datePart = ciiData.substring(ampIndex + 1); // 20260924
+                            ciiData = ciiData.substring(0, ampIndex); // 00+SKU+生产日期
+
+                            // 解析到期日期（8位数字）
+                            if (datePart.length === 8 && /^\d+$/.test(datePart)) {
+                                const year = datePart.substring(0, 4);
+                                const month = datePart.substring(4, 6);
+                                const day = datePart.substring(6, 8);
+                                expiryDateFromQR = `${year}-${month}-${day}`;
+                            }
+                        }
+
+                        // 去掉00前缀
+                        if (ciiData.startsWith('00')) {
+                            ciiData = ciiData.substring(2);
+                        }
+
+                        // 提取SKU（前8位）
+                        if (ciiData.length >= 8) {
+                            sku = ciiData.substring(0, 8);
+                        }
+
+                        console.log('星巴克URL解析:', { sku, expiryDate: expiryDateFromQR });
                     }
-
-                    // 提取SKU（前8位）
-                    if (dataPart.length >= 8) {
-                        sku = dataPart.substring(0, 8);
-                    }
-
-                    // 从URL参数中提取到期日期 (&20260924)
-                    const searchParams = url.search;
-                    const dateMatch = searchParams.match(/&(\d{8})/);
-                    if (dateMatch) {
-                        const dateStr = dateMatch[1];
-                        const year = dateStr.substring(0, 4);
-                        const month = dateStr.substring(4, 6);
-                        const day = dateStr.substring(6, 8);
-                        expiryDateFromQR = `${year}-${month}-${day}`;
-                    }
-
-                    console.log('星巴克URL解析:', { sku, expiryDate: expiryDateFromQR });
+                } catch (e) {
+                    console.error('解析星巴克URL失败:', e);
                 }
             }
             // 格式2: 纯数字格式
