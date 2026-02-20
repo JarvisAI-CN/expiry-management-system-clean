@@ -368,8 +368,13 @@ if (isset($_GET['api'])) {
         }
 
         // 获取要添加的SKU数据
-        $ids_str = implode(',', array_fill(0, count($ids), '?'));
-        $res = $conn->query("SELECT sku, name, category_id, inventory_cycle FROM sku_todos WHERE id IN ($ids_str)");
+        $ids_str = str_repeat('?,', count($ids) - 1) . '?';
+        $types = str_repeat('i', count($ids));
+        
+        $stmt = $conn->prepare("SELECT sku, name, category_id, inventory_cycle FROM sku_todos WHERE id IN ($ids_str)");
+        $stmt->bind_param($types, ...$ids);
+        $stmt->execute();
+        $res = $stmt->get_result();
         
         $added = 0;
         $skipped = 0;
@@ -408,11 +413,9 @@ if (isset($_GET['api'])) {
         }
 
         // 更新sku_todos状态为已完成
-        $update = $conn->prepare("UPDATE sku_todos SET status = 'done', updated_at = NOW() WHERE id IN ($ids_str)");
-        foreach ($ids as $id) {
-            $update->bind_param("i", $id);
-            $update->execute();
-        }
+        $stmt = $conn->prepare("UPDATE sku_todos SET status = 'done', updated_at = NOW() WHERE id IN ($ids_str)");
+        $stmt->bind_param($types, ...$ids);
+        $stmt->execute();
 
         echo json_encode([
             'success'=>true,
@@ -742,34 +745,29 @@ if (isset($_GET['api'])) {
                                     </select>
                                 </div>
                                 <div class="col-4">
-                                    <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">应用批量设置</button>
-                                </div>
-                            <!-- 筛选区域 -->
-                            <div class="row g-2 mb-3">
-                                <div class="col-4">
-                                    <input type="text" id="skuSearchInput" class="form-control form-control-sm" placeholder="搜索SKU或商品名...">
-                                </div>
-                                <div class="col-4">
-                                    <select id="categoryFilter" class="form-select form-select-sm">
-                                        <option value="">📂 按公司分类筛选</option>
-                                        <option value="none">未分类</option>
-                                    </select>
-                                </div>
-                                <div class="col-4">
-                                    <button class="btn btn-sm btn-outline-primary w-100" onclick="loadSkuTodos(1)">🔄 刷新列表</button>
+                                    <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">✅ 应用设置</button>
                                 </div>
                             </div>
                             
-                            <!-- 批量设置区域 -->
+                            <!-- 筛选和批量操作区域 -->
                             <div class="row g-2 mb-3">
-                                <div class="col-3">
-                                    <select id="batchCategory" class="form-select form-select-sm">
-                                        <option value="">📦 绑定系统分类...</option>
+                                <div class="col-2">
+                                    <input type="text" id="skuSearchInput" class="form-control form-control-sm" placeholder="🔍 搜索...">
+                                </div>
+                                <div class="col-2">
+                                    <select id="categoryFilter" class="form-select form-select-sm">
+                                        <option value="">📂 公司分类筛选</option>
+                                        <option value="none">未分类</option>
                                     </select>
                                 </div>
-                                <div class="col-3">
+                                <div class="col-2">
+                                    <select id="batchCategory" class="form-select form-select-sm">
+                                        <option value="">📦 系统分类...</option>
+                                    </select>
+                                </div>
+                                <div class="col-2">
                                     <select id="batchCycle" class="form-select form-select-sm">
-                                        <option value="">⏰ 设置盘点频次...</option>
+                                        <option value="">⏰ 盘点频次...</option>
                                         <option value="weekly">每周</option>
                                         <option value="monthly">每月</option>
                                         <option value="quarterly">每季</option>
@@ -777,14 +775,15 @@ if (isset($_GET['api'])) {
                                         <option value="none">🔴 不盘点</option>
                                     </select>
                                 </div>
-                                <div class="col-3">
+                                <div class="col-2">
                                     <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">✅ 应用设置</button>
                                 </div>
-                                <div class="col-3">
+                                <div class="col-2">
                                     <button id="addToProductsBtn" class="btn btn-sm btn-primary w-100">➕ 添加到商品管理</button>
                                 </div>
                             </div>
-                                <table class="table table-hover">
+                            
+                            <table class="table table-hover">
                                     <thead><tr><th><input type="checkbox" id="selectAllSku"></th><th>SKU</th><th>商品名</th><th>公司分类</th><th>系统分类</th><th>盘点频次</th><th>状态</th><th>操作</th></tr></thead>
                                     <tbody id="skuListBody"></tbody>
                                 </table>
@@ -1069,6 +1068,49 @@ if (isset($_GET['api'])) {
             }
         });
 
+        // 加载分类到下拉框（函数定义移到前面）
+        async function loadCategoriesToSelect() {
+            try {
+                const res = await fetch('admin.php?api=get_categories');
+                const d = await res.json();
+
+                if (d.success && d.categories.length > 0) {
+                    const options = '<option value="">📦 系统分类...</option>' +
+                        d.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+                    document.getElementById('batchCategory').innerHTML = options;
+                    console.log('分类已加载:', d.categories.length, '个');
+                } else {
+                    console.log('加载分类失败:', d);
+                }
+            } catch (e) {
+                console.error('Load categories error:', e);
+            }
+        }
+
+        // 加载上传文件中的分类到筛选框
+        async function loadUploadCategories() {
+            try {
+                const res = await fetch('admin.php?api=get_upload_categories');
+                const d = await res.json();
+
+                if (d.success && d.categories.length > 0) {
+                    const select = document.getElementById('categoryFilter');
+                    if (select) {
+                        select.innerHTML = '<option value="">📂 公司分类筛选</option><option value="none">未分类</option>';
+                        d.categories.forEach(cat => {
+                            const option = document.createElement('option');
+                            option.value = cat;
+                            option.textContent = cat;
+                            select.appendChild(option);
+                        });
+                        console.log('公司分类已加载:', d.categories.length, '个');
+                    }
+                }
+            } catch (e) {
+                console.error('Load upload categories error:', e);
+            }
+        }
+
         // 添加到商品管理
         document.getElementById('addToProductsBtn')?.addEventListener('click', async () => {
             const checkboxes = document.querySelectorAll('.sku-checkbox:checked');
@@ -1107,6 +1149,16 @@ if (isset($_GET['api'])) {
             document.querySelectorAll('.sku-checkbox').forEach(cb => {
                 cb.checked = e.target.checked;
             });
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // 检查当前是否在SKU维护标签页
+            const skuTab = document.querySelector('[data-bs-target="#tab-sku"]');
+            if (skuTab && skuTab.classList.contains('active')) {
+                // 如果已经在SKU维护标签，立即加载分类
+                loadCategoriesToSelect();
+                loadUploadCategories();
+            }
         });
 
         // 切换到SKU维护标签时加载分类选项
