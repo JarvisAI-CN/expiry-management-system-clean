@@ -14,7 +14,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 // CORS支持（如果需要）
 header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');
 header('Access-Control-Allow-Headers: Authorization, Content-Type');
 
 // 处理OPTIONS预检请求
@@ -32,12 +32,19 @@ function validateApiKey($apiKey) {
         return false;
     }
 
-    $stmt = $conn->prepare("SELECT id, name, is_active FROM api_keys WHERE api_key = ? AND is_active = 1");
-    $stmt->bind_param("s", $apiKey);
+    $apiKeyHash = hash('sha256', $apiKey);
+
+    $stmt = $conn->prepare("SELECT id, name, is_active, scopes, expires_at FROM api_keys WHERE api_key_hash = ? AND is_active = 1");
+    $stmt->bind_param("s", $apiKeyHash);
     $stmt->execute();
     $result = $stmt->get_result();
 
     if ($row = $result->fetch_assoc()) {
+        // 检查是否已过期
+        if (!empty($row['expires_at']) && strtotime($row['expires_at']) < time()) {
+            return false;
+        }
+
         // 更新最后使用时间
         $updateStmt = $conn->prepare("UPDATE api_keys SET last_used_at = NOW() WHERE id = ?");
         $updateStmt->bind_param("i", $row['id']);
@@ -83,24 +90,40 @@ function getApiKeyFromHeader() {
 // 主程序
 // ========================================
 
-// 获取API密钥
-$apiKey = getApiKeyFromHeader();
+// 获取请求的endpoint
+$endpoint = $_GET['endpoint'] ?? '';
 
-if (empty($apiKey)) {
-    jsonResponse([
-        'success' => false,
-        'message' => '缺少API密钥'
-    ], 401);
-}
+// 特殊处理：categories endpoint 允许已登录用户访问（不需要API密钥）
+if ($endpoint === 'categories') {
+    session_start();
+    if (!isset($_SESSION['user_id'])) {
+        jsonResponse([
+            'success' => false,
+            'message' => '需要登录'
+        ], 401);
+    }
+    // 已登录用户，跳过API密钥验证
+    $keyInfo = ['id' => $_SESSION['user_id'], 'name' => 'internal_user'];
+} else {
+    // 其他endpoint需要API密钥
+    $apiKey = getApiKeyFromHeader();
 
-// 验证API密钥
-$keyInfo = validateApiKey($apiKey);
+    if (empty($apiKey)) {
+        jsonResponse([
+            'success' => false,
+            'message' => '缺少API密钥'
+        ], 401);
+    }
 
-if (!$keyInfo) {
-    jsonResponse([
-        'success' => false,
-        'message' => 'API密钥无效或已禁用'
-    ], 403);
+    // 验证API密钥
+    $keyInfo = validateApiKey($apiKey);
+
+    if (!$keyInfo) {
+        jsonResponse([
+            'success' => false,
+            'message' => 'API密钥无效或已禁用'
+        ], 403);
+    }
 }
 
 // 获取请求的endpoint
@@ -367,7 +390,7 @@ function getCategoriesData() {
         'success' => true,
         'endpoint' => 'categories',
         'count' => count($categories),
-        'data' => $categories
+        'categories' => $categories  // 前端期望的字段名
     ];
 }
 

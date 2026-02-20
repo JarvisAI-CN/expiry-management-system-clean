@@ -99,6 +99,26 @@ if (isset($_GET['api'])) {
 
     checkAuth();
     
+    if ($action === 'search_products') {
+        $q = trim($_GET['q'] ?? '');
+        if ($q === '') {
+            echo json_encode(['success' => true, 'data' => []]);
+            exit;
+        }
+        // 模糊搜索：SKU 或 品名
+        $like = '%' . $q . '%';
+        $stmt = $conn->prepare("SELECT id, sku, name FROM products WHERE sku LIKE ? OR name LIKE ? ORDER BY id DESC LIMIT 20");
+        $stmt->bind_param('ss', $like, $like);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $list = [];
+        while ($row = $res->fetch_assoc()) {
+            $list[] = $row;
+        }
+        echo json_encode(['success' => true, 'data' => $list]);
+        exit;
+    }
+
     if ($action === 'get_product') {
         $sku = $_GET['sku'] ?? '';
         $stmt = $conn->prepare("SELECT p.*, c.rule as category_rule FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.sku = ? LIMIT 1");
@@ -379,6 +399,18 @@ if (isset($_GET['api'])) {
                 <i class="bi bi-qr-code-scan d-block h1"></i>
                 <span class="fw-bold">点击添加 (扫一扫)</span>
             </div>
+
+            <!-- 手动输入 / 模糊搜索（扫码失败备用） -->
+            <div class="custom-card mb-3">
+                <div class="fw-bold mb-2">手动输入 / 模糊搜索</div>
+                <div class="input-group">
+                    <input id="manualSearchInput" class="form-control" placeholder="输入SKU片段或品名关键词…">
+                    <button id="manualSearchBtn" class="btn btn-outline-primary" type="button">搜索</button>
+                </div>
+                <div id="manualSearchResults" class="mt-2"></div>
+                <div class="text-muted small mt-2">提示：也可以直接粘贴整段二维码内容（包含 #）再搜索。</div>
+            </div>
+
             <div id="pendingList"></div>
             <div class="d-grid mt-3">
                 <button class="btn btn-primary btn-lg shadow fw-bold" 
@@ -451,10 +483,11 @@ if (isset($_GET['api'])) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let html5QrCode = null, currentSessionId = 'S'+Date.now(), pendingData = [];
-        function switchView(v) { 
-            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active')); 
-            document.getElementById(v+'View').classList.add('active'); 
-            if(v==='past') loadPast(); 
+        function switchView(v) {
+            document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+            document.getElementById(v+'View').classList.add('active');
+            if(v==='past') loadPast();
+            if(v==='new') loadCats();  // 切换到新增盘点视图时加载分类
         }
         function showAlert(m, t='info') { 
             const el = document.createElement('div'); 
@@ -497,6 +530,15 @@ if (isset($_GET['api'])) {
                 document.getElementById('scanOverlay').style.display='none'; 
             });
             document.getElementById('addBatchBtn')?.addEventListener('click', ()=>addBatchRow());
+
+            // 手动输入 / 模糊搜索
+            document.getElementById('manualSearchBtn')?.addEventListener('click', ()=>manualSearch());
+            document.getElementById('manualSearchInput')?.addEventListener('keydown', (e)=>{
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    manualSearch();
+                }
+            });
             document.getElementById('confirmEntryBtn')?.addEventListener('click', ()=>{
                 const batches = []; 
                 document.querySelectorAll('.batch-row').forEach(r=>{ 
@@ -536,37 +578,55 @@ if (isset($_GET['api'])) {
             });
         });
         async function searchSKU(sku) {
-            const res = await fetch('index.php?api=get_product&sku='+sku); 
+            const res = await fetch('index.php?api=get_product&sku='+sku);
             const d = await res.json();
-            document.getElementById('productForm').reset(); 
+            document.getElementById('productForm').reset();
             document.getElementById('batchesContainer').innerHTML='';
-            document.getElementById('sku').value = sku; 
+            document.getElementById('sku').value = sku;
             const fields = ['categoryId','productName','removalBuffer'];
-            if(d.exists) {
-                document.getElementById('productName').value=d.product.name; 
-                document.getElementById('categoryId').value=d.product.category_id; 
-                document.getElementById('removalBuffer').value=d.product.removal_buffer;
-                fields.forEach(f => { 
-                    document.getElementById(f).readOnly=true; 
-                    if(document.getElementById(f).tagName==='SELECT') 
-                        document.getElementById(f).disabled=true; 
-                });
-            } else { 
-                fields.forEach(f => { 
-                    document.getElementById(f).readOnly=false; 
-                    if(document.getElementById(f).tagName==='SELECT') 
-                        document.getElementById(f).disabled=false; 
-                }); 
+
+            // 解析二维码日期格式
+            let expiryDateFromQR = null;
+            if (sku.includes('#')) {
+                const parts = sku.split('#');
+                if (parts.length >= 3) {
+                    // 格式: 00 + SKU + 生产日期 + 到期日期
+                    // 或: SKU + 生产日期 + 到期日期
+                    let expiryPart = parts[parts.length - 1]; // 最后一个是到期日期
+                    if (expiryPart.length === 8 && /^\d+$/.test(expiryPart)) {
+                        const year = expiryPart.substring(0, 4);
+                        const month = expiryPart.substring(4, 6);
+                        const day = expiryPart.substring(6, 8);
+                        expiryDateFromQR = `${year}-${month}-${day}`;
+                    }
+                }
             }
-            addBatchRow();
+
+            if(d.exists) {
+                document.getElementById('productName').value=d.product.name;
+                document.getElementById('categoryId').value=d.product.category_id;
+                document.getElementById('removalBuffer').value=d.product.removal_buffer;
+                fields.forEach(f => {
+                    document.getElementById(f).readOnly=true;
+                    if(document.getElementById(f).tagName==='SELECT')
+                        document.getElementById(f).disabled=true;
+                });
+            } else {
+                fields.forEach(f => {
+                    document.getElementById(f).readOnly=false;
+                    if(document.getElementById(f).tagName==='SELECT')
+                        document.getElementById(f).disabled=false;
+                });
+            }
+            addBatchRow(expiryDateFromQR);
             new bootstrap.Modal(document.getElementById('entryModal')).show();
         }
-        function addBatchRow() {
+        function addBatchRow(defaultExpiryDate = null) {
             const row = document.createElement('div');
             row.className = 'batch-row input-group input-group-sm mb-2';
             row.innerHTML = `
                 <span class="input-group-text">效期</span>
-                <input type="date" class="form-control e-in" required>
+                <input type="date" class="form-control e-in" ${defaultExpiryDate ? `value="${defaultExpiryDate}"` : ''} required>
                 <span class="input-group-text">数</span>
                 <input type="number" class="form-control q-in" placeholder="数量" required>
                 <button class="btn btn-outline-danger" onclick="this.parentElement.remove()">×</button>
@@ -582,6 +642,46 @@ if (isset($_GET['api'])) {
                 sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
             });
         }
+        async function manualSearch() {
+            const q = (document.getElementById('manualSearchInput')?.value || '').trim();
+            const box = document.getElementById('manualSearchResults');
+            if (!box) return;
+            box.innerHTML = '';
+            if (!q) {
+                showAlert('请输入SKU片段或品名关键词', 'warning');
+                return;
+            }
+
+            // 如果用户粘贴了整段二维码（包含#），直接走录入流程
+            if (q.includes('#')) {
+                searchSKU(q);
+                return;
+            }
+
+            const res = await fetch('index.php?api=search_products&q=' + encodeURIComponent(q));
+            const d = await res.json();
+            if (!d.success) {
+                showAlert(d.message || '搜索失败', 'danger');
+                return;
+            }
+            if (!d.data || d.data.length === 0) {
+                showAlert('没搜到匹配项', 'warning');
+                return;
+            }
+
+            const list = document.createElement('div');
+            list.className = 'list-group mt-2';
+            d.data.forEach((item) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'list-group-item list-group-item-action';
+                btn.innerHTML = `<div class="fw-bold">${item.name || '(未命名)'}</div><div class="small text-muted">${item.sku}</div>`;
+                btn.addEventListener('click', () => searchSKU(item.sku));
+                list.appendChild(btn);
+            });
+            box.appendChild(list);
+        }
+
         function updatePendingList() {
             const div = document.getElementById('pendingList');
             const btn = document.getElementById('submitSessionBtn');
