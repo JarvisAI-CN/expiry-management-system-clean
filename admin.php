@@ -9,6 +9,21 @@
 session_start();
 require_once 'db.php';
 
+// 字符编码转换函数（GBK/GB2312 -> UTF-8）
+function convertToUtf8($str) {
+    if (!$str) return $str;
+    
+    // 检测编码
+    $encoding = mb_detect_encoding($str, ['UTF-8', 'GBK', 'GB2312', 'ASCII'], true);
+    
+    // 如果不是UTF-8，转换为UTF-8
+    if ($encoding && $encoding !== 'UTF-8') {
+        $str = mb_convert_encoding($str, 'UTF-8', $encoding);
+    }
+    
+    return $str;
+}
+
 // 严格权限检查
 if (!isset($_SESSION['user_id'])) { 
     if (isset($_GET['api'])) {
@@ -89,6 +104,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $sku = trim($data[0]);
                 $name = trim($data[1] ?? '');
 
+                // 字符编码转换（GBK -> UTF-8）
+                $sku = convertToUtf8($sku);
+                $name = convertToUtf8($name);
+
                 if ($sku) {
                     $uploaded_skus[$sku] = $name;
                 }
@@ -119,6 +138,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                 $sku = trim($rowData[0]);
                 $name = trim($rowData[1] ?? '');
+
+                // 字符编码转换（GBK -> UTF-8）
+                $sku = convertToUtf8($sku);
+                $name = convertToUtf8($name);
 
                 if ($sku) {
                     $uploaded_skus[$sku] = $name;
