@@ -3,6 +3,15 @@
 
 
 
+
+## [v2.9.4] - 2026-02-20
+
+### ⚠️ 高风险：API 一键升级代码（给 AI 用）
+- 新增 POST endpoint：`system.update`
+- 需要 scope：`system:update` 或 `admin`
+- 行为：从官方 GitHub Release 下载 tar.gz，先备份当前目录到 /tmp，然后覆盖代码（保留 config.php）
+- 风险：拥有该权限的 key 一旦泄露，等同于远程改站点代码；请谨慎使用、建议单独 key + 设过期时间
+
 ## [v2.9.3] - 2026-02-20
 
 ### 🤖 新增：AI 管理写接口（API Key + Scopes）

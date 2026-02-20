@@ -21,7 +21,7 @@ if (!isset($_SESSION['user_id'])) {
     exit; 
 }
 
-define('APP_VERSION', '2.9.3');
+define('APP_VERSION', '2.9.4');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 
 // 处理管理端 API 请求

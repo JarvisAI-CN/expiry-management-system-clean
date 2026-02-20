@@ -126,6 +126,7 @@ $allowedEndpoints = [
     'inventories' => 'getInventoriesData',
     'items' => 'getItemsData',
     'system.upgrade' => 'handleSystemUpgradeEndpoint',
+    'system.update' => 'handleSystemUpdateEndpoint',
 
     // v2.9.3 写接口（AI 管理）
     'categories.upsert' => 'handleCategoriesUpsert',
@@ -145,6 +146,7 @@ $endpointScopes = [
     'inventories' => 'read:inventories',
     'items' => 'read:items',
     'system.upgrade' => 'system:upgrade',
+    'system.update' => 'system:update',
 
     // v2.9.3 写接口
     'categories.upsert' => 'write:categories',
@@ -840,4 +842,155 @@ function handleProductsDelete() {
     if (!$ok) throw new Exception('删除失败: ' . $conn->error);
 
     return ['success'=>true,'endpoint'=>'products.delete','id'=>$id,'deleted_batches'=>$cnt];
+}
+
+
+// ========================================
+// 高风险：通过 API 执行代码更新（仅管理员/特定 scope）
+// ========================================
+
+/**
+ * POST /api.php?endpoint=system.update
+ * Body(JSON): { "version": "v2.9.3" }  // 可选，默认 latest
+ *
+ * 行为：
+ * - 仅允许从官方 GitHub Release 下载并覆盖当前目录（保留 config.php）
+ * - 先打包备份当前目录到 /tmp
+ *
+ * 风险：拥有该权限的 key 一旦泄露，等同于远程改站点代码。
+ */
+function handleSystemUpdateEndpoint() {
+    requireMethod('POST');
+
+    $data = readJsonBody();
+    $version = normalizeStr($data['version'] ?? 'latest', 32);
+
+    // Allow-list: only our repo releases
+    $repo = 'JarvisAI-CN/expiry-management-system-clean';
+
+    // Build download URL
+    // Prefer explicit version tag; allow 'latest'
+    if ($version === '' || $version === 'latest') {
+        $url = "https://github.com/{$repo}/releases/latest/download/expiry-system-latest.tar.gz";
+        // We'll fallback to tag-based name if latest asset not present
+    } else {
+        // normalize like v2.9.3
+        if (!preg_match('/^v\d+\.\d+\.\d+(?:\.\d+)?$/', $version)) {
+            throw new Exception('version 格式非法，示例: v2.9.3');
+        }
+        $url = "https://github.com/{$repo}/releases/download/{$version}/expiry-system-{$version}.tar.gz";
+    }
+
+    $targetDir = realpath(__DIR__);
+    if (!$targetDir) {
+        throw new Exception('无法定位目标目录');
+    }
+
+    // permissions check
+    if (!is_writable($targetDir)) {
+        return [
+            'success' => false,
+            'endpoint' => 'system.update',
+            'message' => '目标目录不可写（Web 用户无权限覆盖文件）。请用宝塔/SSH 提升目录权限或手动部署。',
+            'target_dir' => $targetDir,
+        ];
+    }
+
+    $tmpDir = sys_get_temp_dir();
+    $ts = date('Ymd-His');
+    $backupPath = $tmpDir . '/expiry-backup-' . $ts . '.tar.gz';
+    $downloadPath = $tmpDir . '/expiry-update-' . $ts . '.tar.gz';
+    $extractDir = $tmpDir . '/expiry-update-' . $ts;
+
+    // 1) Backup current code (exclude runtime logs if present)
+    $cmdBackup = 'tar -czf ' . escapeshellarg($backupPath) . ' -C ' . escapeshellarg($targetDir) . ' .';
+    $out = []; $code = 0;
+    exec($cmdBackup . ' 2>&1', $out, $code);
+    if ($code !== 0) {
+        throw new Exception('备份失败: ' . implode("\n", $out));
+    }
+
+    // 2) Download release tarball
+    $cmdDl = 'curl -L --fail --max-time 60 -o ' . escapeshellarg($downloadPath) . ' ' . escapeshellarg($url);
+    $out = []; $code = 0;
+    exec($cmdDl . ' 2>&1', $out, $code);
+    if ($code !== 0) {
+        // fallback: if latest asset not found, try tag asset name used by our releases
+        if ($version === 'latest') {
+            // Try GitHub API to resolve latest tag + standard filename
+            $api = "https://api.github.com/repos/{$repo}/releases/latest";
+            $json = @file_get_contents($api);
+            $tag = null;
+            if ($json) {
+                $r = json_decode($json, true);
+                $tag = $r['tag_name'] ?? null;
+            }
+            if ($tag && preg_match('/^v\d+\.\d+\.\d+(?:\.\d+)?$/', $tag)) {
+                $url2 = "https://github.com/{$repo}/releases/download/{$tag}/expiry-system-{$tag}.tar.gz";
+                $cmdDl2 = 'curl -L --fail --max-time 60 -o ' . escapeshellarg($downloadPath) . ' ' . escapeshellarg($url2);
+                $out2 = []; $code2 = 0;
+                exec($cmdDl2 . ' 2>&1', $out2, $code2);
+                if ($code2 !== 0) {
+                    throw new Exception('下载失败: ' . implode("\n", $out) . "\n" . implode("\n", $out2));
+                }
+                $url = $url2;
+                $version = $tag;
+            } else {
+                throw new Exception('下载失败: ' . implode("\n", $out));
+            }
+        } else {
+            throw new Exception('下载失败: ' . implode("\n", $out));
+        }
+    }
+
+    // size guard
+    $size = filesize($downloadPath);
+    if ($size === false || $size > 10 * 1024 * 1024) {
+        throw new Exception('下载包大小异常，已中止');
+    }
+
+    // 3) Extract
+    @mkdir($extractDir, 0777, true);
+    $cmdEx = 'tar -xzf ' . escapeshellarg($downloadPath) . ' -C ' . escapeshellarg($extractDir);
+    $out = []; $code = 0;
+    exec($cmdEx . ' 2>&1', $out, $code);
+    if ($code !== 0) {
+        throw new Exception('解压失败: ' . implode("\n", $out));
+    }
+
+    // 4) Basic validation: must contain api.php + index.php
+    if (!file_exists($extractDir . '/api.php') || !file_exists($extractDir . '/index.php')) {
+        throw new Exception('包内容校验失败（缺少关键文件），已中止');
+    }
+
+    // 5) Copy over (preserve config.php)
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($extractDir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+
+    foreach ($iterator as $item) {
+        $rel = substr($item->getPathname(), strlen($extractDir) + 1);
+        if ($rel === 'config.php') {
+            continue; // keep local config
+        }
+        $dest = $targetDir . DIRECTORY_SEPARATOR . $rel;
+
+        if ($item->isDir()) {
+            if (!is_dir($dest)) {
+                @mkdir($dest, 0777, true);
+            }
+        } else {
+            @copy($item->getPathname(), $dest);
+        }
+    }
+
+    return [
+        'success' => true,
+        'endpoint' => 'system.update',
+        'version' => $version,
+        'download_url' => $url,
+        'backup_path' => $backupPath,
+        'message' => '更新完成（已覆盖代码，保留 config.php）。如出现异常可用 backup_path 回滚。'
+    ];
 }
