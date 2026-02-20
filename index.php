@@ -583,26 +583,32 @@ if (isset($_GET['api'])) {
             let expiryDateFromQR = null;
 
             // 解析二维码格式
+            // 格式: 00 + SKU(8位) + 生产日期(8位) # 生产日期 # 到期日期
             if (qrCode.includes('#')) {
                 const parts = qrCode.split('#');
                 if (parts.length >= 3) {
-                    // 格式: 00 + SKU(8位) + 生产日期 + 到期日期
-                    let skuPart = parts[0]; // 第一部分是 00 + SKU
-                    let prodDatePart = parts[1]; // 第二部分是生产日期
-                    let expiryDatePart = parts[2]; // 第三部分是到期日期
+                    let part1 = parts[0]; // 00 + SKU + 生产日期
 
-                    // 去掉前缀 "00"，提取纯SKU
-                    if (skuPart.startsWith('00')) {
-                        sku = skuPart.substring(2);
+                    // 去掉前缀 "00"
+                    if (part1.startsWith('00')) {
+                        part1 = part1.substring(2);
                     }
 
-                    // 解析到期日期
+                    // 提取SKU（前8位）
+                    if (part1.length >= 8) {
+                        sku = part1.substring(0, 8);
+                    }
+
+                    // 解析到期日期（第三部分）
+                    let expiryDatePart = parts[2];
                     if (expiryDatePart.length === 8 && /^\d+$/.test(expiryDatePart)) {
                         const year = expiryDatePart.substring(0, 4);
                         const month = expiryDatePart.substring(4, 6);
                         const day = expiryDatePart.substring(6, 8);
                         expiryDateFromQR = `${year}-${month}-${day}`;
                     }
+
+                    console.log('扫码解析:', { qrCode, sku, expiryDate: expiryDateFromQR });
                 }
             }
 
