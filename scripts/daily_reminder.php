@@ -144,50 +144,13 @@ $html .= "<li><b>3天内到期</b>：".count($expiring_3)."</li>";
 $html .= "<li><b>7天内到期</b>（4~7天）：".count($expiring_7)."</li>";
 $html .= "<li><b>已过期</b>（近3天内过期）：".count($expired_3)."</li>";
 $html .= "</ul>";
-$html .= "<p><b>附件：</b>{$pdfFilename}（PDF打印版；如PDF生成失败则发送CSV：{$csvFilename}）</p>";
+$html .= "<p><b>附件：</b>{$csvFilename}（CSV表格，可直接打印）</p>";
 $html .= render_table('3天内到期（以邮件发布日期为节点）', $expiring_3);
 $html .= render_table('7天内到期（4~7天）', $expiring_7);
 $html .= render_table('已过期（过期时间在三天之内，方便复查）', $expired_3);
 $html .= "</div>";
 
 
-// Build printable PDF via headless Chrome (best for "print & pin" workflow)
-$pdfFilename = 'expiry-reminder-' . date('Ymd') . '.pdf';
-$pdfBytes = null;
-
-$chromeBin = trim((string)shell_exec('command -v google-chrome || command -v chromium-browser || command -v chromium || true'));
-if ($chromeBin !== '') {
-    $tmpDir = sys_get_temp_dir();
-    $htmlPath = $tmpDir . '/expiry-reminder-' . date('Ymd-His') . '.html';
-    $pdfPath = $tmpDir . '/expiry-reminder-' . date('Ymd-His') . '.pdf';
-
-    $printHtml = "<!doctype html><html><head><meta charset='utf-8'>";
-    $printHtml .= "<style>\n";
-    $printHtml .= "body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#111}\n";
-    $printHtml .= "h2{margin:0 0 8px 0}\n";
-    $printHtml .= "h3{margin:16px 0 6px 0}\n";
-    $printHtml .= "table{width:100%;border-collapse:collapse}\n";
-    $printHtml .= "th,td{border:1px solid #333;padding:4px 6px}\n";
-    $printHtml .= "th{background:#f0f0f0}\n";
-    $printHtml .= "@page{size:A4;margin:12mm}\n";
-    $printHtml .= "</style></head><body>";
-    $printHtml .= $html;
-    $printHtml .= "</body></html>";
-
-    @file_put_contents($htmlPath, $printHtml);
-
-    $cmd = escapeshellcmd($chromeBin) . ' --headless --disable-gpu --no-sandbox --print-to-pdf=' . escapeshellarg($pdfPath) . ' ' . escapeshellarg('file://' . $htmlPath);
-    $out = [];
-    $code = 0;
-    exec($cmd . ' 2>&1', $out, $code);
-
-    if ($code === 0 && file_exists($pdfPath)) {
-        $pdfBytes = file_get_contents($pdfPath);
-    }
-
-    @unlink($htmlPath);
-    @unlink($pdfPath);
-}
 $cfg = [
     'host' => setting('smtp_host',''),
     'port' => (int)setting('smtp_port','587'),
@@ -211,19 +174,13 @@ foreach ($recipients as $to) {
         'to' => $to,
         'subject' => $subject,
         'html' => $html,
-        'attachments' => ($pdfBytes !== null ? [
-            [
-                'filename' => $pdfFilename,
-                'contentType' => 'application/pdf',
-                'content' => $pdfBytes,
-            ],
-        ] : [
+        'attachments' => [
             [
                 'filename' => $csvFilename,
                 'contentType' => 'text/csv; charset=UTF-8',
                 'content' => $csvWithBom,
             ],
-        ]),
+        ],
     ]);
     if (!$result['success']) {
         $anyFail = true;
