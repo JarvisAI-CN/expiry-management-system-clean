@@ -617,7 +617,7 @@ if (isset($_GET['api'])) {
             const d = await res.json();
             document.getElementById('productForm').reset();
             document.getElementById('batchesContainer').innerHTML='';
-            document.getElementById('sku').value = qrCode; // 显示原始二维码
+            document.getElementById('sku').value = sku; // 显示提取后的纯SKU
             const fields = ['categoryId','productName','removalBuffer'];
 
             if(d.exists) {
