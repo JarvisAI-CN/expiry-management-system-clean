@@ -20,6 +20,64 @@ if (!isset($_SESSION['user_id'])) {
     exit; 
 }
 
+// 处理传统表单提交（上传SKU文件）
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'upload_sku') {
+    $conn = getDBConnection();
+    
+    if (!isset($_FILES['sku_file'])) {
+        $error = json_encode(['success'=>false, 'message'=>'未选择文件']);
+        header("Location: admin.php?page=sku&upload_result=" . urlencode($error));
+        exit;
+    }
+
+    $file = $_FILES['sku_file'];
+    
+    // 详细的错误信息
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        $errorMessages = [
+            UPLOAD_ERR_INI_SIZE => '文件超过php.ini设置的大小',
+            UPLOAD_ERR_FORM_SIZE => '文件超过表单设置的大小',
+            UPLOAD_ERR_PARTIAL => '文件只有部分被上传',
+            UPLOAD_ERR_NO_FILE => '没有文件被上传',
+            UPLOAD_ERR_NO_TMP_DIR => '找不到临时文件夹',
+            UPLOAD_ERR_CANT_WRITE => '文件写入失败',
+            UPLOAD_ERR_EXTENSION => 'PHP扩展停止了文件上传',
+        ];
+        $errorMsg = $errorMessages[$file['error']] ?? "未知错误(错误代码:{$file['error']})";
+        $error = json_encode(['success'=>false, 'message'=>"上传失败: $errorMsg"]);
+        header("Location: admin.php?page=sku&upload_result=" . urlencode($error));
+        exit;
+    }
+
+    // 保存文件
+    $filename = 'sku_upload_' . time() . '_' . basename($file['name']);
+    $filepath = __DIR__ . '/uploads/' . $filename;
+    if (!is_dir(__DIR__ . '/uploads')) {
+        mkdir(__DIR__ . '/uploads', 0755, true);
+    }
+
+    if (!move_uploaded_file($file['tmp_name'], $filepath)) {
+        $error = json_encode(['success'=>false, 'message'=>'文件保存失败，请检查uploads目录权限']);
+        header("Location: admin.php?page=sku&upload_result=" . urlencode($error));
+        exit;
+    }
+
+    // 创建上传任务记录
+    $stmt = $conn->prepare("INSERT INTO sku_upload_tasks (filename, status) VALUES (?, 'pending')");
+    $stmt->bind_param("s", $filename);
+    $stmt->execute();
+    $task_id = $conn->insert_id;
+
+    // 触发异步处理
+    $php_path = exec('which php8.3');
+    $script_path = __DIR__ . '/process_sku_upload.php';
+    exec("$php_path $script_path $task_id > /dev/null 2>&1 &");
+
+    $result = json_encode(['success'=>true, 'task_id'=>$task_id, 'message'=>'文件上传成功', 'filename'=>$filename]);
+    header("Location: admin.php?page=sku&upload_result=" . urlencode($result));
+    exit;
+}
+
 define('APP_VERSION', '2.7.3-alpha');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 define('FALLBACK_URL', 'http://150.109.204.23:8888/');
@@ -87,8 +145,20 @@ if (isset($_GET['api'])) {
         }
 
         $file = $_FILES['csv_file'];
+        
+        // 详细的错误信息
         if ($file['error'] !== UPLOAD_ERR_OK) {
-            echo json_encode(['success'=>false, 'message'=>'文件上传失败']); exit;
+            $errorMessages = [
+                UPLOAD_ERR_INI_SIZE => '文件超过php.ini设置的大小',
+                UPLOAD_ERR_FORM_SIZE => '文件超过表单设置的大小',
+                UPLOAD_ERR_PARTIAL => '文件只有部分被上传',
+                UPLOAD_ERR_NO_FILE => '没有文件被上传',
+                UPLOAD_ERR_NO_TMP_DIR => '找不到临时文件夹',
+                UPLOAD_ERR_CANT_WRITE => '文件写入失败',
+                UPLOAD_ERR_EXTENSION => 'PHP扩展停止了文件上传',
+            ];
+            $errorMsg = $errorMessages[$file['error']] ?? "未知错误(错误代码:{$file['error']})";
+            echo json_encode(['success'=>false, 'message'=>"上传失败: $errorMsg"]); exit;
         }
 
         // 保存文件
@@ -99,7 +169,7 @@ if (isset($_GET['api'])) {
         }
 
         if (!move_uploaded_file($file['tmp_name'], $filepath)) {
-            echo json_encode(['success'=>false, 'message'=>'文件保存失败']); exit;
+            echo json_encode(['success'=>false, 'message'=>'文件保存失败，请检查uploads目录权限']); exit;
         }
 
         // 创建上传任务记录
@@ -109,7 +179,7 @@ if (isset($_GET['api'])) {
         $task_id = $conn->insert_id;
 
         // 触发异步处理
-        $php_path = exec('which php');
+        $php_path = exec('which php8.3');
         $script_path = __DIR__ . '/process_sku_upload.php';
         exec("$php_path $script_path $task_id > /dev/null 2>&1 &");
 
@@ -337,14 +407,37 @@ if (isset($_GET['api'])) {
                                 格式：两列（SKU, 商品名），支持 .xlsx、.xls、.csv 格式。<br>
                                 系统将自动对比数据库，识别新增/缺失/重复的SKU。
                             </p>
-                            <div class="row g-2">
-                                <div class="col-8">
-                                    <input type="file" id="skuFileInput" accept=".csv,.xlsx,.xls" class="form-control">
+                            
+                            <?php if (isset($_GET['upload_result'])): ?>
+                                <?php 
+                                $result = json_decode($_GET['upload_result'], true);
+                                if ($result && $result['success']): 
+                                    $task = $result['task'];
+                                ?>
+                                <div class="alert alert-success">
+                                    <h6>✅ 上传成功！</h6>
+                                    <p>文件：<strong><?php echo htmlspecialchars($task['filename']); ?></strong></p>
+                                    <p>正在后台处理中，请稍候刷新页面查看结果...</p>
+                                    <a href="admin.php?page=sku" class="btn btn-primary btn-sm">刷新页面</a>
                                 </div>
-                                <div class="col-4">
-                                    <button id="uploadSkuBtn" class="btn btn-primary w-100">开始上传</button>
+                            <?php else: ?>
+                                <div class="alert alert-danger">
+                                    ❌ <?php echo isset($result) ? $result['message'] : '上传失败'; ?>
                                 </div>
-                            </div>
+                            <?php endif; ?>
+                            <?php endif; ?>
+                            
+                            <form method="POST" action="admin.php?page=sku" enctype="multipart/form-data">
+                                <input type="hidden" name="action" value="upload_sku">
+                                <div class="row g-2">
+                                    <div class="col-8">
+                                        <input type="file" name="sku_file" accept=".csv,.xlsx,.xls" class="form-control" required>
+                                    </div>
+                                    <div class="col-4">
+                                        <button type="submit" class="btn btn-primary w-100">开始上传</button>
+                                    </div>
+                                </div>
+                            </form>
                             <div id="uploadStatus" class="mt-3" style="display:none;">
                                 <div class="alert alert-info">
                                     <i class="bi bi-hourglass-split me-2"></i>正在处理中，请稍候...
@@ -472,62 +565,28 @@ if (isset($_GET['api'])) {
         // SKU维护相关函数
         let skuPollTimer = null;
 
-        // 上传SKU CSV文件
-        document.getElementById('uploadSkuBtn')?.addEventListener('click', async () => {
-            const fileInput = document.getElementById('skuFileInput');
-            if (!fileInput.files.length) {
-                alert('请选择CSV文件');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('csv_file', fileInput.files[0]);
-
-            const statusDiv = document.getElementById('uploadStatus');
-            const resultDiv = document.getElementById('uploadResult');
-            statusDiv.style.display = 'block';
-            resultDiv.innerHTML = '';
-
+        // 轮询任务状态（检查后台处理进度）
+        async function checkTaskProgress() {
             try {
-                const res = await fetch('admin.php?api=upload_sku_csv', {
-                    method: 'POST',
-                    body: formData
-                });
+                const res = await fetch('admin.php?api=get_upload_tasks');
                 const d = await res.json();
 
-                if (d.success) {
-                    statusDiv.innerHTML = '<div class="alert alert-warning"><i class="bi bi-hourglass-split me-2"></i>AI正在努力整理中，请稍候...</div>';
-                    // 开始轮询任务状态
-                    pollTaskStatus(d.task_id);
-                } else {
-                    statusDiv.style.display = 'none';
-                    resultDiv.innerHTML = `<div class="alert alert-danger">${d.message}</div>`;
-                }
-            } catch (e) {
-                statusDiv.style.display = 'none';
-                resultDiv.innerHTML = '<div class="alert alert-danger">上传失败</div>';
-            }
-        });
-
-        // 轮询任务状态
-        async function pollTaskStatus(taskId) {
-            if (skuPollTimer) clearInterval(skuPollTimer);
-
-            skuPollTimer = setInterval(async () => {
-                try {
-                    const res = await fetch(`admin.php?api=get_task_result&task_id=${taskId}`);
-                    const d = await res.json();
-
-                    if (d.success && d.task.status !== 'pending' && d.task.status !== 'processing') {
-                        clearInterval(skuPollTimer);
-                        showTaskResult(d.task, d.result);
+                if (d.success && d.tasks.length > 0) {
+                    const latestTask = d.tasks[0];
+                    if (latestTask.status === 'completed' && document.getElementById('uploadResult').innerHTML === '') {
+                        showTaskResult(latestTask, JSON.parse(latestTask.result_data || '{}'));
                         loadUploadHistory();
                         loadSkuTodos();
                     }
-                } catch (e) {
-                    console.error('Poll error:', e);
                 }
-            }, 3000);
+            } catch (e) {
+                console.error('Check task error:', e);
+            }
+        }
+
+        // 页面加载时开始轮询任务进度
+        if (document.querySelector('[data-bs-target="#tab-sku"]')) {
+            setInterval(checkTaskProgress, 3000);
         }
 
         // 显示任务结果
