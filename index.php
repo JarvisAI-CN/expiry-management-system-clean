@@ -434,6 +434,21 @@ if (isset($_GET['api'])) {
             </div>
 
             <div id="pendingList"></div>
+            
+            <!-- 草稿操作按钮 -->
+            <div class="row g-2 mb-3">
+                <div class="col-6">
+                    <button id="saveDraftBtn" class="btn btn-outline-success w-100">
+                        💾 保存草稿
+                    </button>
+                </div>
+                <div class="col-6">
+                    <button id="clearDraftBtn" class="btn btn-outline-danger w-100">
+                        🗑️ 清空草稿
+                    </button>
+                </div>
+            </div>
+            
             <div class="d-grid mt-3">
                 <button class="btn btn-primary btn-lg shadow fw-bold" 
                         id="submitSessionBtn" 
@@ -505,6 +520,45 @@ if (isset($_GET['api'])) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let html5QrCode = null, currentSessionId = 'S'+Date.now(), pendingData = [];
+        
+        // 本地存储相关函数
+        const STORAGE_KEY = 'inventory_draft';
+        
+        function saveDraft() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(pendingData));
+                console.log('草稿已保存:', pendingData.length, '条记录');
+                showAlert('✅ 草稿已自动保存', 'success');
+            } catch (e) {
+                console.error('保存草稿失败:', e);
+            }
+        }
+        
+        function loadDraft() {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                if (saved) {
+                    pendingData = JSON.parse(saved);
+                    console.log('已加载草稿:', pendingData.length, '条记录');
+                    updatePendingList();
+                    if (pendingData.length > 0) {
+                        showAlert(`📋 已恢复 ${pendingData.length} 条草稿记录`, 'info');
+                    }
+                }
+            } catch (e) {
+                console.error('加载草稿失败:', e);
+            }
+        }
+        
+        function clearDraft() {
+            try {
+                localStorage.removeItem(STORAGE_KEY);
+                console.log('草稿已清空');
+            } catch (e) {
+                console.error('清空草稿失败:', e);
+            }
+        }
+        
         function switchView(v) {
             document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
             document.getElementById(v+'View').classList.add('active');
@@ -520,6 +574,9 @@ if (isset($_GET['api'])) {
             setTimeout(()=>el.remove(), 2500); 
         }
         document.addEventListener('DOMContentLoaded', () => {
+            // 加载草稿数据
+            loadDraft();
+            
             if(document.getElementById('portalView')) { refreshHealth(); loadCats(); checkUpgrade(); }
             document.getElementById('loginForm')?.addEventListener('submit', async(e)=>{ 
                 e.preventDefault(); 
@@ -590,6 +647,20 @@ if (isset($_GET['api'])) {
                 }
             });
 
+            // 草稿操作按钮
+            document.getElementById('saveDraftBtn')?.addEventListener('click', () => {
+                saveDraft();
+            });
+            
+            document.getElementById('clearDraftBtn')?.addEventListener('click', () => {
+                if (confirm('确定要清空所有草稿数据吗？此操作不可恢复！')) {
+                    pendingData = [];
+                    clearDraft();
+                    updatePendingList();
+                    showAlert('🗑️ 草稿已清空', 'info');
+                }
+            });
+
             document.getElementById('confirmEntryBtn')?.addEventListener('click', ()=>{
                 const batches = []; 
                 document.querySelectorAll('.batch-row').forEach(r=>{ 
@@ -606,7 +677,8 @@ if (isset($_GET['api'])) {
                     batches, 
                     session_id:currentSessionId
                 });
-                updatePendingList(); 
+                updatePendingList();
+                saveDraft();  // 自动保存草稿
                 bootstrap.Modal.getInstance(document.getElementById('entryModal')).hide();
             });
             document.getElementById('submitSessionBtn')?.addEventListener('click', async()=>{
@@ -623,6 +695,7 @@ if (isset($_GET['api'])) {
                 showAlert('提交成功','success'); 
                 pendingData=[]; 
                 currentSessionId='S'+Date.now(); 
+                clearDraft();  // 清空草稿
                 updatePendingList(); 
                 switchView('portal'); 
                 refreshHealth();
