@@ -103,13 +103,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                 $sku = trim($data[0]);
                 $name = trim($data[1] ?? '');
+                $category_name = trim($data[2] ?? ''); // 第三列：分类
 
                 // 字符编码转换（GBK -> UTF-8）
                 $sku = convertToUtf8($sku);
                 $name = convertToUtf8($name);
+                $category_name = convertToUtf8($category_name);
 
                 if ($sku) {
-                    $uploaded_skus[$sku] = $name;
+                    $uploaded_skus[$sku] = [
+                        'name' => $name,
+                        'category_name' => $category_name
+                    ];
                 }
             }
 
@@ -138,13 +143,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                 $sku = trim($rowData[0]);
                 $name = trim($rowData[1] ?? '');
+                $category_name = trim($rowData[2] ?? ''); // 第三列：分类
 
                 // 字符编码转换（GBK -> UTF-8）
                 $sku = convertToUtf8($sku);
                 $name = convertToUtf8($name);
+                $category_name = convertToUtf8($category_name);
 
                 if ($sku) {
-                    $uploaded_skus[$sku] = $name;
+                    $uploaded_skus[$sku] = [
+                        'name' => $name,
+                        'category_name' => $category_name
+                    ];
                 }
             }
 
@@ -159,13 +169,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         // 检查新增和重复SKU
         $checkStmt = $conn->prepare("SELECT sku FROM products WHERE sku = ?");
-        foreach ($uploaded_skus as $sku => $name) {
+        foreach ($uploaded_skus as $sku => $data) {
             $checkStmt->bind_param("s", $sku);
             $checkStmt->execute();
             $exists = $checkStmt->get_result()->num_rows > 0;
 
             if (!$exists) {
-                $new_skus[] = ['sku' => $sku, 'name' => $name];
+                $new_skus[] = [
+                    'sku' => $sku,
+                    'name' => $data['name'],
+                    'category_name' => $data['category_name']
+                ];
             }
         }
 
@@ -178,8 +192,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         foreach ($allDbSkus as $sku => $name) {
             if (!isset($uploaded_skus[$sku])) {
-                $missing_skus[] = ['sku' => $sku, 'name' => $name];
+                $missing_skus[] = ['sku' => $sku, 'name' => $name, 'category_name' => ''];
             }
+        }
+
+        // 检查并添加category_name字段
+        $checkColumn = $conn->query("SHOW COLUMNS FROM sku_todos LIKE 'category_name'");
+        if ($checkColumn->num_rows == 0) {
+            $conn->query("ALTER TABLE sku_todos ADD COLUMN category_name VARCHAR(100) DEFAULT '' AFTER name");
         }
 
         // 保存到sku_todos表
@@ -187,13 +207,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $clearStmt->bind_param("s", $filename);
         $clearStmt->execute();
 
-        $insertStmt = $conn->prepare("INSERT INTO sku_todos (sku, name, status, source_file) VALUES (?, ?, 'pending', ?)");
+        $insertStmt = $conn->prepare("INSERT INTO sku_todos (sku, name, category_name, status, source_file) VALUES (?, ?, ?, 'pending', ?)");
         foreach ($new_skus as $item) {
-            $insertStmt->bind_param("sss", $item['sku'], $item['name'], $filename);
+            $insertStmt->bind_param("ssss", $item['sku'], $item['name'], $item['category_name'], $filename);
             $insertStmt->execute();
         }
         foreach ($missing_skus as $item) {
-            $insertStmt->bind_param("sss", $item['sku'], $item['name'], $filename);
+            $insertStmt->bind_param("ssss", $item['sku'], $item['name'], $item['category_name'], $filename);
             $insertStmt->execute();
         }
 
@@ -378,6 +398,17 @@ if (isset($_GET['api'])) {
             $params[] = $search;
         }
 
+        // 按分类筛选
+        if (!empty($_GET['category_filter'])) {
+            $category_filter = $_GET['category_filter'];
+            if ($category_filter === 'none') {
+                $where .= " AND (category_name IS NULL OR category_name = '')";
+            } else {
+                $where .= " AND category_name = ?";
+                $params[] = $category_filter;
+            }
+        }
+
         // 获取总数
         $count_sql = "SELECT COUNT(*) as total FROM sku_todos WHERE $where";
         if (!empty($params)) {
@@ -412,6 +443,17 @@ if (isset($_GET['api'])) {
             'page'=>$page,
             'pages'=>ceil($total/$limit)
         ]);
+        exit;
+    }
+
+    if ($action === 'get_upload_categories') {
+        // 获取上传文件中的所有分类
+        $res = $conn->query("SELECT DISTINCT category_name FROM sku_todos WHERE category_name IS NOT NULL AND category_name != '' ORDER BY category_name");
+        $categories = [];
+        while ($row = $res->fetch_assoc()) {
+            $categories[] = $row['category_name'];
+        }
+        echo json_encode(['success'=>true, 'categories'=>$categories]);
         exit;
     }
 
@@ -636,6 +678,20 @@ if (isset($_GET['api'])) {
                                     <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">应用批量设置</button>
                                 </div>
                             </div>
+                            
+                            <!-- 搜索和筛选 -->
+                            <div class="row g-2 mb-3">
+                                <div class="col-6">
+                                    <input type="text" id="skuSearchInput" class="form-control form-control-sm" placeholder="搜索SKU或商品名...">
+                                </div>
+                                <div class="col-6">
+                                    <select id="categoryFilter" class="form-select form-select-sm">
+                                        <option value="">所有分类</option>
+                                        <option value="none">未分类</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
                             <div class="table-responsive">
                                 <table class="table table-hover">
                                     <thead><tr><th><input type="checkbox" id="selectAllSku"></th><th>SKU</th><th>商品名</th><th>分类</th><th>盘点频次</th><th>状态</th><th>操作</th></tr></thead>
@@ -806,8 +862,10 @@ if (isset($_GET['api'])) {
         async function loadSkuTodos(page = 1) {
             try {
                 const search = document.getElementById('skuSearchInput')?.value || '';
+                const categoryFilter = document.getElementById('categoryFilter')?.value || '';
                 let url = `admin.php?api=get_sku_todos&page=${page}`;
                 if (search) url += `&search=${encodeURIComponent(search)}`;
+                if (categoryFilter) url += `&category_filter=${encodeURIComponent(categoryFilter)}`;
 
                 const res = await fetch(url);
                 const d = await res.json();
@@ -821,9 +879,9 @@ if (isset($_GET['api'])) {
                             <td><input type="checkbox" class="sku-checkbox" data-id="${item.id}"></td>
                             <td><code>${item.sku}</code></td>
                             <td>${item.name}</td>
-                            <td><select class="form-select form-select-sm" onchange="updateSkuTodo(${item.id}, 'category', this.value)">
-                                ${categorySelect.replace(`value="${item.category_id}"`, `value="${item.category_id}" selected`)}
-                            </select></td>
+                            <td>
+                                <small class="text-muted">${item.category_name || '-'}</small>
+                            </td>
                             <td><select class="form-select form-select-sm" onchange="updateSkuTodo(${item.id}, 'cycle', this.value)">
                                 <option value="weekly" ${item.inventory_cycle === 'weekly' ? 'selected' : ''}>每周</option>
                                 <option value="monthly" ${item.inventory_cycle === 'monthly' ? 'selected' : ''}>每月</option>
@@ -915,8 +973,20 @@ if (isset($_GET['api'])) {
         // 切换到SKU维护标签时加载分类选项
         document.querySelector('[data-bs-target="#tab-sku"]')?.addEventListener('click', () => {
             loadCategoriesToSelect();
+            loadUploadCategories();
             loadSkuTodos();
             loadUploadHistory();
+        });
+
+        // 搜索和筛选监听器
+        let searchTimer = null;
+        document.getElementById('skuSearchInput')?.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => loadSkuTodos(1), 300);
+        });
+        
+        document.getElementById('categoryFilter')?.addEventListener('change', () => {
+            loadSkuTodos(1);
         });
 
         // 加载分类到下拉框
@@ -934,6 +1004,31 @@ if (isset($_GET['api'])) {
                 }
             } catch (e) {
                 console.error('Load categories error:', e);
+            }
+        }
+
+        // 加载上传文件中的分类到筛选框
+        async function loadUploadCategories() {
+            try {
+                const res = await fetch('admin.php?api=get_upload_categories');
+                const d = await res.json();
+
+                if (d.success && d.categories.length > 0) {
+                    const select = document.getElementById('categoryFilter');
+                    if (select) {
+                        // 保留"所有分类"和"未分类"选项
+                        select.innerHTML = '<option value="">所有分类</option><option value="none">未分类</option>';
+                        // 添加上传文件中的分类
+                        d.categories.forEach(cat => {
+                            const option = document.createElement('option');
+                            option.value = cat;
+                            option.textContent = cat;
+                            select.appendChild(option);
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error('Load upload categories error:', e);
             }
         }
     </script>
