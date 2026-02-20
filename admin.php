@@ -332,14 +332,14 @@ if (isset($_GET['api'])) {
 
                         <!-- 上传区域 -->
                         <div class="admin-card p-4 mb-4">
-                            <h5 class="mb-3">📤 上传SKU清单（CSV格式）</h5>
+                            <h5 class="mb-3">📤 上传SKU清单（支持Excel/CSV）</h5>
                             <p class="text-muted small mb-3">
-                                格式：两列CSV文件（SKU,商品名），第一行可以是表头或直接数据。<br>
+                                格式：两列（SKU, 商品名），支持 .xlsx、.xls、.csv 格式。<br>
                                 系统将自动对比数据库，识别新增/缺失/重复的SKU。
                             </p>
                             <div class="row g-2">
                                 <div class="col-8">
-                                    <input type="file" id="skuFileInput" accept=".csv" class="form-control">
+                                    <input type="file" id="skuFileInput" accept=".csv,.xlsx,.xls" class="form-control">
                                 </div>
                                 <div class="col-4">
                                     <button id="uploadSkuBtn" class="btn btn-primary w-100">开始上传</button>

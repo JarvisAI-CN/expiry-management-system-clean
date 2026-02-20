@@ -40,36 +40,66 @@ if (!file_exists($filepath)) {
 }
 
 try {
-    // 解析CSV文件
-    $handle = fopen($filepath, 'r');
-    if (!$handle) {
-        throw new Exception("无法打开文件");
-    }
+    // 根据文件扩展名选择解析方式
+    $fileExt = strtolower(pathinfo($filepath, PATHINFO_EXTENSION));
 
-    $uploaded_skus = [];
-    $row_count = 0;
-
-    // 读取CSV（假设第一行可能是表头）
-    while (($data = fgetcsv($handle, 1000, ',')) !== FALSE) {
-        $row_count++;
-
-        // 跳过空行
-        if (empty($data[0])) continue;
-
-        // 检查是否是表头（包含非数字的SKU）
-        if ($row_count === 1 && !preg_match('/^\d+$/', $data[0])) {
-            continue; // 跳过表头
+    if ($fileExt === 'csv') {
+        // 解析CSV文件
+        $handle = fopen($filepath, 'r');
+        if (!$handle) {
+            throw new Exception("无法打开文件");
         }
 
-        $sku = trim($data[0]);
-        $name = trim($data[1] ?? '');
+        $uploaded_skus = [];
+        $row_count = 0;
 
-        if ($sku) {
-            $uploaded_skus[$sku] = $name;
+        while (($data = fgetcsv($handle, 1000, ',')) !== FALSE) {
+            $row_count++;
+
+            if (empty($data[0])) continue;
+
+            if ($row_count === 1 && !preg_match('/^\d+$/', $data[0])) {
+                continue;
+            }
+
+            $sku = trim($data[0]);
+            $name = trim($data[1] ?? '');
+
+            if ($sku) {
+                $uploaded_skus[$sku] = $name;
+            }
         }
-    }
 
-    fclose($handle);
+        fclose($handle);
+
+    } elseif ($fileExt === 'xlsx' || $fileExt === 'xls') {
+        // 解析Excel文件
+        require_once __DIR__ . '/xlsx_parser.php';
+        $rows = parseXlsxFile($filepath);
+
+        $uploaded_skus = [];
+        $row_count = 0;
+
+        foreach ($rows as $rowData) {
+            $row_count++;
+
+            if (empty($rowData[0])) continue;
+
+            if ($row_count === 1 && !preg_match('/^\d+$/', $rowData[0])) {
+                continue;
+            }
+
+            $sku = trim($rowData[0]);
+            $name = trim($rowData[1] ?? '');
+
+            if ($sku) {
+                $uploaded_skus[$sku] = $name;
+            }
+        }
+
+    } else {
+        throw new Exception("不支持的文件格式：$fileExt");
+    }
 
     // 获取数据库中所有SKU
     $db_skus = [];
