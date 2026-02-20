@@ -14,7 +14,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 // CORS支持（如果需要）
 header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');
 header('Access-Control-Allow-Headers: Authorization, Content-Type');
 
 // 处理OPTIONS预检请求
@@ -125,7 +125,13 @@ $allowedEndpoints = [
     // v2.9.0 新增 REST 接口
     'inventories' => 'getInventoriesData',
     'items' => 'getItemsData',
-    'system.upgrade' => 'handleSystemUpgradeEndpoint'
+    'system.upgrade' => 'handleSystemUpgradeEndpoint',
+
+    // v2.9.3 写接口（AI 管理）
+    'categories.upsert' => 'handleCategoriesUpsert',
+    'categories.delete' => 'handleCategoriesDelete',
+    'products.upsert' => 'handleProductsUpsert',
+    'products.delete' => 'handleProductsDelete',
 ];
 
 // endpoint 所需的最小 scope
@@ -138,7 +144,13 @@ $endpointScopes = [
     'all' => 'read:all',
     'inventories' => 'read:inventories',
     'items' => 'read:items',
-    'system.upgrade' => 'system:upgrade'
+    'system.upgrade' => 'system:upgrade',
+
+    // v2.9.3 写接口
+    'categories.upsert' => 'write:categories',
+    'categories.delete' => 'write:categories',
+    'products.upsert' => 'write:products',
+    'products.delete' => 'write:products',
 ];
 
 if (!isset($allowedEndpoints[$endpoint])) {
@@ -607,4 +619,225 @@ function handleSystemUpgradeEndpoint() {
         'mode' => 'execute',
         'message' => '升级脚本不存在或不可用'
     ];
+}
+
+
+
+// ========================================
+// v2.9.3 写接口（AI 管理）
+// ========================================
+
+function readJsonBody(): array {
+    $raw = file_get_contents('php://input');
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+function requireMethod(string $method) {
+    if ($_SERVER['REQUEST_METHOD'] !== $method) {
+        throw new Exception('HTTP method not allowed');
+    }
+}
+
+function normalizeInt($v, $default = 0): int {
+    if ($v === null || $v === '') return (int)$default;
+    return (int)$v;
+}
+
+function normalizeStr($v, $maxLen = 255): string {
+    $s = trim((string)$v);
+    if (mb_strlen($s, 'UTF-8') > $maxLen) {
+        $s = mb_substr($s, 0, $maxLen, 'UTF-8');
+    }
+    return $s;
+}
+
+/**
+ * POST /api.php?endpoint=categories.upsert
+ * Body: { name, type, rule }
+ */
+function handleCategoriesUpsert() {
+    requireMethod('POST');
+    $conn = getDBConnection();
+    if (!$conn) throw new Exception('数据库连接失败');
+
+    $data = readJsonBody();
+    $name = normalizeStr($data['name'] ?? '', 50);
+    $type = normalizeStr($data['type'] ?? '', 20);
+    $rule = $data['rule'] ?? null;
+
+    if ($name === '' || $type === '') {
+        throw new Exception('缺少必填字段 name/type');
+    }
+
+    if ($rule !== null && !is_string($rule)) {
+        // allow object/array rule and serialize
+        $rule = json_encode($rule, JSON_UNESCAPED_UNICODE);
+    }
+
+    $stmt = $conn->prepare("INSERT INTO categories (name, type, rule) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE type=VALUES(type), rule=VALUES(rule)");
+    $stmt->bind_param('sss', $name, $type, $rule);
+    $ok = $stmt->execute();
+
+    if (!$ok) {
+        throw new Exception('写入失败: ' . $conn->error);
+    }
+
+    return ['success' => true, 'endpoint' => 'categories.upsert', 'name' => $name];
+}
+
+/**
+ * POST /api.php?endpoint=categories.delete
+ * Body: { id?, name?, force? }
+ * - If referenced by products, reject unless force=true; then set products.category_id=0
+ */
+function handleCategoriesDelete() {
+    requireMethod('POST');
+    $conn = getDBConnection();
+    if (!$conn) throw new Exception('数据库连接失败');
+
+    $data = readJsonBody();
+    $id = normalizeInt($data['id'] ?? 0, 0);
+    $name = normalizeStr($data['name'] ?? '', 50);
+    $force = (bool)($data['force'] ?? false);
+
+    if ($id <= 0 && $name === '') {
+        throw new Exception('必须提供 id 或 name');
+    }
+
+    if ($id <= 0) {
+        $stmt = $conn->prepare('SELECT id FROM categories WHERE name = ? LIMIT 1');
+        $stmt->bind_param('s', $name);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res->fetch_assoc();
+        if (!$row) throw new Exception('分类不存在');
+        $id = (int)$row['id'];
+    }
+
+    $stmt = $conn->prepare('SELECT COUNT(*) AS cnt FROM products WHERE category_id = ?');
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
+    $cnt = (int)($stmt->get_result()->fetch_assoc()['cnt'] ?? 0);
+
+    if ($cnt > 0 && !$force) {
+        return [
+            'success' => false,
+            'endpoint' => 'categories.delete',
+            'message' => '该分类仍被商品引用，禁止删除。可先迁移或传 force=true 自动解除引用',
+            'referenced_products' => $cnt,
+        ];
+    }
+
+    $conn->begin_transaction();
+    try {
+        if ($cnt > 0 && $force) {
+            $stmt = $conn->prepare('UPDATE products SET category_id = 0 WHERE category_id = ?');
+            $stmt->bind_param('i', $id);
+            $stmt->execute();
+        }
+
+        $stmt = $conn->prepare('DELETE FROM categories WHERE id = ?');
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+
+        $conn->commit();
+    } catch (Exception $e) {
+        $conn->rollback();
+        throw $e;
+    }
+
+    return ['success' => true, 'endpoint' => 'categories.delete', 'id' => $id, 'detached_products' => $cnt];
+}
+
+/**
+ * POST /api.php?endpoint=products.upsert
+ * Body: { id?, sku, name, category_id?, removal_buffer?, inventory_cycle? }
+ */
+function handleProductsUpsert() {
+    requireMethod('POST');
+    $conn = getDBConnection();
+    if (!$conn) throw new Exception('数据库连接失败');
+
+    $data = readJsonBody();
+    $id = normalizeInt($data['id'] ?? 0, 0);
+    $sku = normalizeStr($data['sku'] ?? '', 100);
+    $name = normalizeStr($data['name'] ?? '', 200);
+    $categoryId = normalizeInt($data['category_id'] ?? 0, 0);
+    $removalBuffer = normalizeInt($data['removal_buffer'] ?? 0, 0);
+    $inventoryCycle = normalizeStr($data['inventory_cycle'] ?? 'none', 20);
+
+    if ($sku === '' || $name === '') {
+        throw new Exception('缺少必填字段 sku/name');
+    }
+
+    $allowedCycles = ['daily','weekly','monthly','yearly','none'];
+    if (!in_array($inventoryCycle, $allowedCycles, true)) {
+        $inventoryCycle = 'none';
+    }
+
+    if ($id > 0) {
+        $stmt = $conn->prepare('UPDATE products SET sku=?, name=?, category_id=?, removal_buffer=?, inventory_cycle=? WHERE id=?');
+        $stmt->bind_param('ssiisi', $sku, $name, $categoryId, $removalBuffer, $inventoryCycle, $id);
+        $ok = $stmt->execute();
+        if (!$ok) throw new Exception('更新失败: ' . $conn->error);
+        return ['success'=>true,'endpoint'=>'products.upsert','mode'=>'update','id'=>$id];
+    }
+
+    $stmt = $conn->prepare('INSERT INTO products (sku, name, category_id, removal_buffer, inventory_cycle) VALUES (?, ?, ?, ?, ?)');
+    $stmt->bind_param('ssiis', $sku, $name, $categoryId, $removalBuffer, $inventoryCycle);
+    $ok = $stmt->execute();
+    if (!$ok) throw new Exception('创建失败: ' . $conn->error);
+
+    return ['success'=>true,'endpoint'=>'products.upsert','mode'=>'create','id'=>$conn->insert_id];
+}
+
+/**
+ * POST /api.php?endpoint=products.delete
+ * Body: { id? , sku? , force? }
+ * - If batches exist, reject unless force=true (then delete product, batches cascade)
+ */
+function handleProductsDelete() {
+    requireMethod('POST');
+    $conn = getDBConnection();
+    if (!$conn) throw new Exception('数据库连接失败');
+
+    $data = readJsonBody();
+    $id = normalizeInt($data['id'] ?? 0, 0);
+    $sku = normalizeStr($data['sku'] ?? '', 100);
+    $force = (bool)($data['force'] ?? false);
+
+    if ($id <= 0 && $sku === '') {
+        throw new Exception('必须提供 id 或 sku');
+    }
+
+    if ($id <= 0) {
+        $stmt = $conn->prepare('SELECT id FROM products WHERE sku = ? LIMIT 1');
+        $stmt->bind_param('s', $sku);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+        if (!$row) throw new Exception('商品不存在');
+        $id = (int)$row['id'];
+    }
+
+    $stmt = $conn->prepare('SELECT COUNT(*) AS cnt FROM batches WHERE product_id = ?');
+    $stmt->bind_param('i', $id);
+    $stmt->execute();
+    $cnt = (int)($stmt->get_result()->fetch_assoc()['cnt'] ?? 0);
+
+    if ($cnt > 0 && !$force) {
+        return [
+            'success'=>false,
+            'endpoint'=>'products.delete',
+            'message'=>'该商品存在批次数据，禁止删除。可传 force=true 强制删除（批次将级联删除）',
+            'batches' => $cnt,
+        ];
+    }
+
+    $stmt = $conn->prepare('DELETE FROM products WHERE id = ?');
+    $stmt->bind_param('i', $id);
+    $ok = $stmt->execute();
+    if (!$ok) throw new Exception('删除失败: ' . $conn->error);
+
+    return ['success'=>true,'endpoint'=>'products.delete','id'=>$id,'deleted_batches'=>$cnt];
 }

@@ -44,6 +44,8 @@ v2.9.0 开始，API Key 具备 **作用域（Scopes）**，用于控制不同密
 | `read:inventories`| 查看盘点会话列表                     | `inventories`                       |
 | `read:items`     | 查看库存 / 盘点明细                   | `items`                             |
 | `system:upgrade` | 通过 API 触发 v2.9.0 升级脚本         | `system.upgrade` (POST 模式)        |
+| `write:categories` | 分类增删改（AI管理） | `categories.upsert` / `categories.delete` (POST) |
+| `write:products` | 商品增删改（AI管理） | `products.upsert` / `products.delete` (POST) |
 
 > 提示：如果 `scopes` 为空，系统会自动回退为 `read:all`，保持向下兼容。
 
@@ -309,3 +311,41 @@ curl -X POST \
   - 新增：`api_keys.scopes` 字段与 Scope 权限系统
   - 新增：`upgrade_v2.9.0.php` 数据库升级脚本
   - 文档：本文件 `API_USAGE.md`
+
+
+---
+
+## 7. v2.9.3 新增：AI 管理写接口（POST）
+
+> 这些接口是给 AI 做“后台数据管理”用的，不走图形页面。
+
+### 7.1 categories.upsert
+- Scope：`write:categories` 或 `admin`
+- 方法：POST
+- Body(JSON)：
+  - `name` (必填)
+  - `type` (必填)
+  - `rule` (可选，字符串或对象；对象会自动 JSON 序列化)
+
+### 7.2 categories.delete
+- Scope：`write:categories` 或 `admin`
+- 方法：POST
+- Body(JSON)：
+  - `id` 或 `name`（二选一必填）
+  - `force`（可选，true 时会先把引用该分类的商品 category_id 置 0，再删除分类）
+
+### 7.3 products.upsert
+- Scope：`write:products` 或 `admin`
+- 方法：POST
+- Body(JSON)：
+  - `id`（可选；有则更新，无则创建）
+  - `sku` (必填)
+  - `name` (必填)
+  - `category_id` / `removal_buffer` / `inventory_cycle`（可选）
+
+### 7.4 products.delete
+- Scope：`write:products` 或 `admin`
+- 方法：POST
+- Body(JSON)：
+  - `id` 或 `sku`（二选一必填）
+  - `force`（可选；商品存在批次时默认禁止删除，force=true 才会删除，批次会级联删除）

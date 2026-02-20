@@ -2,6 +2,21 @@
 
 
 
+
+## [v2.9.3] - 2026-02-20
+
+### 🤖 新增：AI 管理写接口（API Key + Scopes）
+- 新增 POST endpoints：
+  - `categories.upsert` / `categories.delete`
+  - `products.upsert` / `products.delete`
+- 新增 scopes：`write:categories`、`write:products`（`admin` 仍可全放行）
+- 删除保护：
+  - 分类被商品引用时默认禁止删除（force=true 才会自动解除引用再删）
+  - 商品存在批次时默认禁止删除（force=true 才会删除，批次级联删除）
+
+### 🔧 改进：后台创建 API Key 支持填写 scopes
+- admin.php 创建密钥弹窗新增 scopes 输入框，并将 scopes 传入创建接口
+
 ## [v2.9.2] - 2026-02-20
 
 ### ✉️ 每日提醒邮件附件优化（适配宝塔部署）

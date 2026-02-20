@@ -21,7 +21,7 @@ if (!isset($_SESSION['user_id'])) {
     exit; 
 }
 
-define('APP_VERSION', '2.9.2');
+define('APP_VERSION', '2.9.3');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 
 // 处理管理端 API 请求
@@ -146,7 +146,8 @@ if (isset($_GET['api'])) {
             exit;
         }
 
-        $result = createApiKey($name, $userId, $expiresAt);
+        $scopes = trim($data['scopes'] ?? 'read:all');
+        $result = createApiKey($name, $userId, $expiresAt, $scopes);
         echo json_encode($result); exit;
     }
     if ($action === 'delete_api_key') {
@@ -378,6 +379,11 @@ if (isset($_GET['api'])) {
                             <input type="text" id="keyName" class="form-control" placeholder="例如：移动端APP" required>
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">Scopes（权限，可选）</label>
+                            <input type="text" id="keyScopes" class="form-control" placeholder="read:all 或 admin 或 read:products,write:products">
+                            <small class="text-muted">默认 read:all；写接口建议使用 admin 或显式 write:* scopes</small>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">过期时间（可选）</label>
                             <input type="date" id="keyExpires" class="form-control">
                             <small class="text-muted">留空表示永不过期</small>
@@ -551,6 +557,8 @@ if (isset($_GET['api'])) {
         async function createApiKey() {
             const name = document.getElementById('keyName').value.trim();
             const expiresAt = document.getElementById('keyExpires').value || null;
+            const scopes = document.getElementById('keyScopes') ? document.getElementById('keyScopes').value.trim() : '';
+
 
             if (!name) {
                 alert('请输入密钥名称');
@@ -559,7 +567,7 @@ if (isset($_GET['api'])) {
 
             const res = await fetch('admin.php?api=create_api_key', {
                 method: 'POST',
-                body: JSON.stringify({ name, expires_at: expiresAt })
+                body: JSON.stringify({ name, expires_at: expiresAt, scopes })
             });
             const d = await res.json();
 
