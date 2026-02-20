@@ -95,20 +95,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             while (($data = fgetcsv($handle, 1000, ',')) !== FALSE) {
                 $row_count++;
 
-                if (empty($data[0])) continue;
+                if (empty($data[1])) continue;  // SKU在第2列
 
-                if ($row_count === 1 && !preg_match('/^\d+$/', $data[0])) {
-                    continue;
+                if ($row_count === 1 && !preg_match('/^\d+$/', $data[1])) {
+                    continue;  // 跳过表头
                 }
 
-                $sku = trim($data[0]);
-                $name = trim($data[1] ?? '');
-                $category_name = trim($data[2] ?? ''); // 第三列：分类
+                // CSV格式：第1列=公司分类，第2列=SKU，第3列=商品名
+                $category_name = trim($data[0]);  // 库存产品类别名称
+                $sku = trim($data[1]);           // SKU编码
+                $name = trim($data[2] ?? '');    // 产品名称
 
                 // 字符编码转换（GBK -> UTF-8）
+                $category_name = convertToUtf8($category_name);
                 $sku = convertToUtf8($sku);
                 $name = convertToUtf8($name);
-                $category_name = convertToUtf8($category_name);
 
                 if ($sku) {
                     $uploaded_skus[$sku] = [
@@ -135,20 +136,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             foreach ($rows as $rowData) {
                 $row_count++;
 
-                if (empty($rowData[0])) continue;
+                if (empty($rowData[1])) continue;  // SKU在第2列
 
-                if ($row_count === 1 && !preg_match('/^\d+$/', $rowData[0])) {
-                    continue;
+                if ($row_count === 1 && !preg_match('/^\d+$/', $rowData[1])) {
+                    continue;  // 跳过表头
                 }
 
-                $sku = trim($rowData[0]);
-                $name = trim($rowData[1] ?? '');
-                $category_name = trim($rowData[2] ?? ''); // 第三列：分类
+                // Excel格式：第1列=公司分类，第2列=SKU，第3列=商品名
+                $category_name = trim($rowData[0]);  // 库存产品类别名称
+                $sku = trim($rowData[1]);           // SKU编码
+                $name = trim($rowData[2] ?? '');    // 产品名称
 
                 // 字符编码转换（GBK -> UTF-8）
+                $category_name = convertToUtf8($category_name);
                 $sku = convertToUtf8($sku);
                 $name = convertToUtf8($name);
-                $category_name = convertToUtf8($category_name);
 
                 if ($sku) {
                     $uploaded_skus[$sku] = [
