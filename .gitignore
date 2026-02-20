@@ -1,0 +1,31 @@
+# 项目管理文件（不上传）
+这个项目的文件/
+项目闪念/
+deploy_package/
+
+# 备份文件
+*.bak
+*_backup.*
+*.backup.*
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 压缩包
+*.zip
+*.tar.gz
+
+# 日志
+logs/
+*.log
+
+# 开发工具
+.vscode/
+.idea/
+
+# 系统文件
+.gitignore
+.env
