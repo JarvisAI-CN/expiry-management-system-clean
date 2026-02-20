@@ -21,7 +21,7 @@ if (!isset($_SESSION['user_id'])) {
     exit; 
 }
 
-define('APP_VERSION', '2.9.0');
+define('APP_VERSION', '2.9.1');
 define('UPDATE_URL', 'https://raw.githubusercontent.com/JarvisAI-CN/expiry-management-system/main/');
 
 // 处理管理端 API 请求
@@ -72,12 +72,62 @@ if (isset($_GET['api'])) {
 
     // 4. AI & 系统设置
     if ($action === 'get_settings') {
-        echo json_encode(['success'=>true, 'settings'=>['ai_api_url'=>getSetting('ai_api_url'), 'ai_api_key'=>getSetting('ai_api_key'), 'ai_model'=>getSetting('ai_model')]]); exit;
+        echo json_encode(['success'=>true, 'settings'=>[
+            'ai_api_url'=>getSetting('ai_api_url'),
+            'ai_api_key'=>getSetting('ai_api_key'),
+            'ai_model'=>getSetting('ai_model'),
+            // SMTP & daily reminder
+            'smtp_host'=>getSetting('smtp_host'),
+            'smtp_port'=>getSetting('smtp_port','587'),
+            'smtp_secure'=>getSetting('smtp_secure','tls'),
+            'smtp_user'=>getSetting('smtp_user'),
+            'smtp_pass'=>getSetting('smtp_pass'),
+            'smtp_from_email'=>getSetting('smtp_from_email'),
+            'smtp_from_name'=>getSetting('smtp_from_name','保质期管理系统'),
+            'daily_reminder_enabled'=>getSetting('daily_reminder_enabled','0'),
+            'daily_reminder_recipients'=>getSetting('daily_reminder_recipients'),
+            'daily_reminder_time'=>getSetting('daily_reminder_time','09:00'),
+        ]]); exit;
     }
     if ($action === 'save_settings') {
         $data = json_decode(file_get_contents('php://input'), true);
         foreach($data as $k=>$v) setSetting($k, $v);
         echo json_encode(['success'=>true]); exit;
+    }
+
+    if ($action === 'send_test_email') {
+        $data = json_decode(file_get_contents('php://input'), true) ?: [];
+        $to = trim($data['to'] ?? getSetting('daily_reminder_recipients',''));
+        if ($to === '') { echo json_encode(['success'=>false,'message'=>'请先填写收件地址'], JSON_UNESCAPED_UNICODE); exit; }
+        require_once 'smtp_mailer.php';
+        $cfg = [
+            'host' => getSetting('smtp_host',''),
+            'port' => (int)getSetting('smtp_port','587'),
+            'secure' => getSetting('smtp_secure','tls'),
+            'username' => getSetting('smtp_user',''),
+            'password' => getSetting('smtp_pass',''),
+            'from_email' => getSetting('smtp_from_email',''),
+            'from_name' => getSetting('smtp_from_name','保质期管理系统'),
+            'to' => $to,
+            'subject' => 'SMTP 测试邮件（保质期管理系统）',
+            'html' => '<p>这是一封测试邮件。如果你收到，说明 SMTP 配置可用。</p>',
+        ];
+        foreach (['host','username','password','from_email'] as $k) {
+            if (trim((string)$cfg[$k])==='') { echo json_encode(['success'=>false,'message'=>'请先完整填写 SMTP 配置'], JSON_UNESCAPED_UNICODE); exit; }
+        }
+        $r = smtp_send_mail($cfg);
+        echo json_encode(['success'=>$r['success'], 'message'=>$r['success']?'发送成功':'发送失败：'.$r['message']], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($action === 'send_daily_reminder_now') {
+        // 手动触发（不依赖 cron），用于验证配置
+        $cmd = 'php ' . escapeshellarg(__DIR__ . '/scripts/daily_reminder.php') . ' --force';
+        $out = []; $code = 0;
+        exec($cmd . ' 2>&1', $out, $code);
+        echo json_encode(['success'=>$code===0, 'message'=>implode("
+", $out)] , JSON_UNESCAPED_UNICODE);
+        exit;
     }
 
     // 5. API密钥管理
@@ -198,7 +248,7 @@ if (isset($_GET['api'])) {
                         <div class="d-flex justify-content-between mb-4"><h4>分类规则引擎</h4></div>
                         <div class="row">
                             <div class="col-md-7"><div class="admin-card p-3" id="catListContainer"></div></div>
-                            <div class="col-md-5"><div class="admin-card p-3"><h5>新增分类</h5><form id="catForm"><input type="text" id="catName" class="form-control mb-2" placeholder="分类名" required><select id="catType" class="form-select mb-2"><option value="snack">小食品</option><option value="material">物料</option><option value="coffee">咖啡豆</option></select><button class="btn btn-primary w-100">保存规则</button></form></div></div>
+                            <div class="col-md-5"><div class="admin-card p-3"><h5>新增分类</h5><form id="catForm"><input type="text" id="catName" class="form-control mb-2" placeholder="分类名" required><select id="catType" class="form-select mb-2"><option value="snack">小食品</option><option value="material">物料</option><option value="coffee">咖啡豆</option></select><div class="row g-2 mb-2"><div class="col-4"><input type="number" id="catWarn1" class="form-control" placeholder="严重(天)"></div><div class="col-4"><input type="number" id="catWarn2" class="form-control" placeholder="警告(天)"></div><div class="col-4"><input type="number" id="catWarn3" class="form-control" placeholder="提醒(天)"></div></div><div class="text-muted small mb-2">留空则使用全局 alert_days（默认 3,7,15）</div><button class="btn btn-primary w-100">保存规则</button></form></div></div>
                         </div>
                     </div>
                     <div class="tab-pane fade" id="tab-users">
@@ -233,6 +283,72 @@ if (isset($_GET['api'])) {
                     <div class="tab-pane fade" id="tab-ai">
                         <div class="d-flex justify-content-between mb-4"><h4>AI 接口设置</h4></div>
                         <div class="admin-card p-4 mx-auto" style="max-width: 600px;"><form id="aiForm"><div class="mb-3"><label class="form-label">API URL</label><input type="text" id="ai_url" class="form-control" placeholder="https://api.openai.com/v1"></div><div class="mb-3"><label class="form-label">API Key</label><input type="password" id="ai_key" class="form-control"></div><div class="mb-3"><label class="form-label">Model</label><input type="text" id="ai_model" class="form-control" placeholder="gpt-4o"></div><div class="d-flex gap-2"><button class="btn btn-primary flex-grow-1">保存设置</button><button type="button" id="testAi" class="btn btn-outline-info" style="min-width: 150px;">测试连接</button></div></form></div>
+                        <div class="admin-card p-4 mx-auto mt-3" style="max-width: 600px;">
+                            <h5 class="mb-3">每日提醒（SMTP 邮件）</h5>
+                            <form id="mailForm">
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SMTP Host</label>
+                                        <input type="text" id="smtp_host" class="form-control" placeholder="smtp.qq.com">
+                                    </div>
+                                    <div class="col-md-3 mb-3">
+                                        <label class="form-label">端口</label>
+                                        <input type="number" id="smtp_port" class="form-control" placeholder="587">
+                                    </div>
+                                    <div class="col-md-3 mb-3">
+                                        <label class="form-label">加密</label>
+                                        <select id="smtp_secure" class="form-select">
+                                            <option value="tls">TLS(StartTLS)</option>
+                                            <option value="ssl">SSL</option>
+                                            <option value="none">无</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SMTP 用户名</label>
+                                        <input type="text" id="smtp_user" class="form-control" placeholder="邮箱账号">
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SMTP 密码/授权码</label>
+                                        <input type="password" id="smtp_pass" class="form-control" placeholder="授权码">
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">发件邮箱</label>
+                                        <input type="email" id="smtp_from_email" class="form-control" placeholder="noreply@xxx.com">
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">发件人名称</label>
+                                        <input type="text" id="smtp_from_name" class="form-control" placeholder="保质期管理系统">
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-8 mb-3">
+                                        <label class="form-label">收件人（多个用逗号分隔）</label>
+                                        <input type="text" id="daily_recipients" class="form-control" placeholder="a@xx.com,b@xx.com">
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label class="form-label">发送时间</label>
+                                        <input type="time" id="daily_time" class="form-control" value="09:00">
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-2 align-items-center">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="daily_enabled">
+                                        <label class="form-check-label" for="daily_enabled">启用每日提醒</label>
+                                    </div>
+                                    <button type="button" class="btn btn-outline-primary ms-auto" id="testMailBtn">发送测试邮件</button>
+                                    <button type="button" class="btn btn-outline-success" id="sendNowBtn">立即发送今日提醒</button>
+                                    <button type="submit" class="btn btn-primary">保存SMTP设置</button>
+                                </div>
+                                <div class="text-muted small mt-2">
+                                    定时发送需要服务器 cron（建议每小时执行一次）：<code>php scripts/daily_reminder.php</code>（脚本会自动确保每天只发一次）
+                                </div>
+                            </form>
+                        </div>
+
                     </div>
                     <div class="tab-pane fade" id="tab-system">
                         <div class="d-flex justify-content-between mb-4"><h4>系统维护</h4></div>
@@ -308,7 +424,7 @@ if (isset($_GET['api'])) {
         document.addEventListener('DOMContentLoaded', () => {
             loadProducts(); loadCats(); loadUsers(); loadSettings(); loadApiKeys();
             document.getElementById('catForm').addEventListener('submit', async (e)=>{
-                e.preventDefault(); const rule = JSON.stringify({need_buffer: true, scrap_on_removal: true});
+                e.preventDefault(); const rule = JSON.stringify({need_buffer: true, scrap_on_removal: true, warning_days_level1: document.getElementById('catWarn1').value||null, warning_days_level2: document.getElementById('catWarn2').value||null, warning_days_level3: document.getElementById('catWarn3').value||null});
                 await fetch('admin.php?api=save_category', {method:'POST', body:JSON.stringify({name:document.getElementById('catName').value, type:document.getElementById('catType').value, rule})});
                 loadCats(); e.target.reset();
             });
@@ -316,6 +432,41 @@ if (isset($_GET['api'])) {
                 e.preventDefault(); await fetch('admin.php?api=save_settings', {method:'POST', body:JSON.stringify({ai_api_url:document.getElementById('ai_url').value, ai_api_key:document.getElementById('ai_key').value, ai_model:document.getElementById('ai_model').value})});
                 alert('设置已保存');
             });
+
+            if (document.getElementById('mailForm')) {
+                document.getElementById('mailForm').addEventListener('submit', async (e)=>{
+                    e.preventDefault();
+                    const payload = {
+                        smtp_host: document.getElementById('smtp_host').value,
+                        smtp_port: document.getElementById('smtp_port').value,
+                        smtp_secure: document.getElementById('smtp_secure').value,
+                        smtp_user: document.getElementById('smtp_user').value,
+                        smtp_pass: document.getElementById('smtp_pass').value,
+                        smtp_from_email: document.getElementById('smtp_from_email').value,
+                        smtp_from_name: document.getElementById('smtp_from_name').value,
+                        daily_reminder_recipients: document.getElementById('daily_recipients').value,
+                        daily_reminder_time: document.getElementById('daily_time').value,
+                        daily_reminder_enabled: document.getElementById('daily_enabled').checked ? '1' : '0',
+                    };
+                    await fetch('admin.php?api=save_settings', {method:'POST', body:JSON.stringify(payload)});
+                    alert('SMTP设置已保存');
+                });
+
+                document.getElementById('testMailBtn').addEventListener('click', async ()=>{
+                    const to = prompt('发送到哪个邮箱？留空则用“收件人”字段。','');
+                    const res = await fetch('admin.php?api=send_test_email', {method:'POST', body: JSON.stringify({to})});
+                    const d = await res.json();
+                    alert(d.message || (d.success?'发送成功':'发送失败'));
+                });
+
+                document.getElementById('sendNowBtn').addEventListener('click', async ()=>{
+                    if(!confirm('确定立即发送今日提醒吗？')) return;
+                    const res = await fetch('admin.php?api=send_daily_reminder_now');
+                    const d = await res.json();
+                    alert(d.message || (d.success?'已触发':'触发失败'));
+                });
+            }
+
             document.getElementById('testAi').addEventListener('click', async ()=>{
                 const btn = document.getElementById('testAi'); const originalText = btn.innerText; let timeLeft = 50;
                 btn.disabled = true; btn.innerText = `测试中... (${timeLeft}s)`;
@@ -351,7 +502,24 @@ if (isset($_GET['api'])) {
         }
         async function loadSettings() {
             const res = await fetch('admin.php?api=get_settings'); const d = await res.json();
-            if(d.success) { document.getElementById('ai_url').value=d.settings.ai_api_url; document.getElementById('ai_key').value=d.settings.ai_api_key; document.getElementById('ai_model').value=d.settings.ai_model; }
+            if(d.success) {
+                document.getElementById('ai_url').value=d.settings.ai_api_url;
+                document.getElementById('ai_key').value=d.settings.ai_api_key;
+                document.getElementById('ai_model').value=d.settings.ai_model;
+
+                if (document.getElementById('smtp_host')) {
+                    document.getElementById('smtp_host').value = d.settings.smtp_host || '';
+                    document.getElementById('smtp_port').value = d.settings.smtp_port || '587';
+                    document.getElementById('smtp_secure').value = d.settings.smtp_secure || 'tls';
+                    document.getElementById('smtp_user').value = d.settings.smtp_user || '';
+                    document.getElementById('smtp_pass').value = d.settings.smtp_pass || '';
+                    document.getElementById('smtp_from_email').value = d.settings.smtp_from_email || '';
+                    document.getElementById('smtp_from_name').value = d.settings.smtp_from_name || '保质期管理系统';
+                    document.getElementById('daily_recipients').value = d.settings.daily_reminder_recipients || '';
+                    document.getElementById('daily_time').value = d.settings.daily_reminder_time || '09:00';
+                    document.getElementById('daily_enabled').checked = (d.settings.daily_reminder_enabled || '0') === '1';
+                }
+            }
         }
 
         // API密钥管理

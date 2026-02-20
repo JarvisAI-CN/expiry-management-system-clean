@@ -134,22 +134,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   PRIMARY KEY (`id`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
                 
-                // 表8: api_keys (修复核心：确保此表创建)
+                // 表8: api_keys（与代码一致：使用 api_key_hash + scopes；api_key 仅兼容保留）
                 "CREATE TABLE IF NOT EXISTS `api_keys` (
                   `id` INT(11) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '密钥ID',
-                  `name` VARCHAR(100) NOT NULL COMMENT '密钥名称',
-                  `api_key` VARCHAR(64) NOT NULL COMMENT 'API密钥（SHA256哈希）',
+                  `name` VARCHAR(100) NOT NULL COMMENT '密钥名称（便于识别）',
+                  `api_key_hash` VARCHAR(64) NOT NULL COMMENT 'API密钥哈希（sha256）',
+                  `api_key` VARCHAR(64) DEFAULT NULL COMMENT '旧版明文/API密钥字段（兼容保留，不再用于校验）',
                   `created_by` INT(11) UNSIGNED NOT NULL COMMENT '创建者用户ID',
                   `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                   `last_used_at` DATETIME DEFAULT NULL COMMENT '最后使用时间',
-                  `expires_at` DATETIME DEFAULT NULL COMMENT '过期时间',
-                  `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否启用',
+                  `expires_at` DATETIME DEFAULT NULL COMMENT '过期时间（NULL=永不过期）',
+                  `is_active` TINYINT(1) DEFAULT 1 COMMENT '是否启用：0=禁用，1=启用',
+                  `scopes` VARCHAR(255) NOT NULL DEFAULT 'read:all' COMMENT '权限范围（逗号分隔的scope列表）',
                   PRIMARY KEY (`id`),
-                  UNIQUE KEY `uk_api_key` (`api_key`),
-                  KEY `idx_created_by` (`created_by`)
+                  UNIQUE KEY `uk_api_key_hash` (`api_key_hash`),
+                  KEY `idx_created_by` (`created_by`),
+                  KEY `idx_is_active` (`is_active`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API密钥管理表'",
                 
-                // 表9: api_logs (修复核心：确保此表创建)
+                // 表9: api_logs
                 "CREATE TABLE IF NOT EXISTS `api_logs` (
                   `id` BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '日志ID',
                   `api_key_id` INT(11) UNSIGNED NOT NULL COMMENT '关联密钥ID',
@@ -169,7 +172,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ('ai_api_key', ''),
                 ('ai_model', 'gpt-4o'),
                 ('alert_email', ''),
-                ('alert_days', '3,7,15')"
+                ('alert_days', '3,7,15'),
+                ('smtp_host', ''),
+                ('smtp_port', '587'),
+                ('smtp_secure', 'tls'),
+                ('smtp_user', ''),
+                ('smtp_pass', ''),
+                ('smtp_from_email', ''),
+                ('smtp_from_name', '保质期管理系统'),
+                ('daily_reminder_enabled', '0'),
+                ('daily_reminder_recipients', ''),
+                ('daily_reminder_time', '09:00'),
+                ('daily_reminder_last_sent', '')"
             ];
             
             // 执行每条SQL并记录结果

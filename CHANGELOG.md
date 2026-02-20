@@ -1,5 +1,20 @@
 # 更新日志 (CHANGELOG)
 
+
+## [v2.9.1] - 2026-02-20
+
+### ✅ 新增：分类阈值（按分类自定义临期天数）
+- 分类规则 `categories.rule` 支持字段：`warning_days_level1/2/3`
+- 若分类未配置，则回退到全局 `settings.alert_days`（默认 3,7,15）
+
+### ✅ 新增：每日邮件提醒（SMTP 可配置）
+- 管理后台（admin.php → AI 配置页）新增 SMTP 与收件人配置
+- 新增脚本：`php scripts/daily_reminder.php`（支持 `--force`，并确保每天只发一次）
+- 支持“发送测试邮件 / 立即发送今日提醒”按钮
+
+### 🐛 修复：新安装 API 表结构与代码不一致
+- install.php 创建的 `api_keys` 表改为与代码一致：使用 `api_key_hash` + `scopes`，`api_key` 仅作兼容字段
+
 ## [v2.9.0] - 2026-02-19
 
 ### 🐛 Bug修复（重要！）
