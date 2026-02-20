@@ -65,33 +65,25 @@ $stmt->bind_param('i', $maxWindow);
 $stmt->execute();
 $res = $stmt->get_result();
 
-$expired = [];
-$critical = [];
-$warning = [];
-$reminder = [];
 
-function cat_thresholds($ruleJson, $g1, $g2, $g3) {
-    if (!$ruleJson) return [$g1, $g2, $g3];
-    $data = json_decode($ruleJson, true);
-    if (!is_array($data)) return [$g1, $g2, $g3];
-    $t1 = isset($data['warning_days_level1']) ? (int)$data['warning_days_level1'] : $g1;
-    $t2 = isset($data['warning_days_level2']) ? (int)$data['warning_days_level2'] : $g2;
-    $t3 = isset($data['warning_days_level3']) ? (int)$data['warning_days_level3'] : $g3;
-    return [$t1, $t2, $t3];
-}
+// === Report windows (fixed by requirement) ===
+// - expiring within 3 days (0..3)
+// - expiring within 7 days (4..7)
+// - expired within last 3 days (-3..-1)
+
+$expiring_3 = [];
+$expiring_7 = [];
+$expired_3 = [];
 
 while ($row = $res->fetch_assoc()) {
     $days = (int)$row['days_to_expiry'];
-    [$t1,$t2,$t3] = cat_thresholds($row['rule'] ?? '', $g1,$g2,$g3);
 
-    if ($days < 0) {
-        $expired[] = $row;
-    } elseif ($days <= $t1) {
-        $critical[] = $row;
-    } elseif ($days <= $t2) {
-        $warning[] = $row;
-    } elseif ($days <= $t3) {
-        $reminder[] = $row;
+    if ($days >= 0 && $days <= 3) {
+        $expiring_3[] = $row;
+    } elseif ($days >= 4 && $days <= 7) {
+        $expiring_7[] = $row;
+    } elseif ($days < 0 && $days >= -3) {
+        $expired_3[] = $row;
     }
 }
 
@@ -100,7 +92,7 @@ $subject = "保质期每日提醒（{$today}）";
 function render_table($title, $items) {
     if (count($items) === 0) return "";
     $rows = '';
-    foreach (array_slice($items, 0, 50) as $r) {
+    foreach (array_slice($items, 0, 200) as $r) {
         $sku = htmlspecialchars($r['sku']);
         $name = htmlspecialchars($r['product_name']);
         $cat = htmlspecialchars($r['category_name'] ?? '-');
@@ -112,22 +104,51 @@ function render_table($title, $items) {
     return "<h3 style='margin-top:18px'>{$title}（".count($items)."）</h3><table border='1' cellpadding='6' cellspacing='0' style='border-collapse:collapse;font-size:13px'><thead><tr><th>SKU</th><th>商品</th><th>分类</th><th>到期日</th><th>数量</th><th>剩余天数</th></tr></thead><tbody>{$rows}</tbody></table>";
 }
 
+function csv_escape($v) {
+    $v = (string)$v;
+    $v = str_replace('"', '""', $v);
+    return '"' . $v . '"';
+}
+
+function build_csv_section($title, $items) {
+    $lines = [];
+    $lines[] = $title;
+    $lines[] = 'SKU,商品,分类,到期日,数量,剩余天数';
+    foreach ($items as $r) {
+        $lines[] = implode(',', [
+            csv_escape($r['sku'] ?? ''),
+            csv_escape($r['product_name'] ?? ''),
+            csv_escape($r['category_name'] ?? ''),
+            csv_escape($r['expiry_date'] ?? ''),
+            csv_escape($r['quantity'] ?? ''),
+            csv_escape($r['days_to_expiry'] ?? ''),
+        ]);
+    }
+    $lines[] = '';
+    return implode("\r\n", $lines);
+}
+
+$csv = "";
+$csv .= build_csv_section("3天内到期（以 {$today} 为节点）", $expiring_3);
+$csv .= "\r\n" . build_csv_section("7天内到期（4~7天）", $expiring_7);
+$csv .= "\r\n" . build_csv_section("已过期（近3天内过期，方便复查）", $expired_3);
+
+$csvFilename = 'expiry-reminder-' . date('Ymd') . '.csv';
+$csvWithBom = "\xEF\xBB\xBF" . $csv; // Excel-friendly UTF-8 BOM
+
 $html = "<div style='font-family:Arial,Helvetica,sans-serif'>";
 $html .= "<h2>保质期每日提醒</h2>";
 $html .= "<p>日期：{$today}</p>";
 $html .= "<ul>";
-$html .= "<li>已过期：<b>".count($expired)."</b></li>";
-$html .= "<li>严重（临期）：<b>".count($critical)."</b></li>";
-$html .= "<li>警告：<b>".count($warning)."</b></li>";
-$html .= "<li>提醒：<b>".count($reminder)."</b></li>";
+$html .= "<li><b>3天内到期</b>：".count($expiring_3)."</li>";
+$html .= "<li><b>7天内到期</b>（4~7天）：".count($expiring_7)."</li>";
+$html .= "<li><b>已过期</b>（近3天内过期）：".count($expired_3)."</li>";
 $html .= "</ul>";
-$html .= render_table('已过期（需要立即处理）', $expired);
-$html .= render_table('严重预警（临期）', $critical);
-$html .= render_table('警告', $warning);
-$html .= render_table('提醒', $reminder);
-$html .= "<p style='color:#666'>备注：阈值优先使用分类规则（warning_days_level1/2/3），否则使用全局 alert_days（{$g1},{$g2},{$g3}）</p>";
+$html .= "<p><b>附件：</b>{$csvFilename}（可下载表格）</p>";
+$html .= render_table('3天内到期（以邮件发布日期为节点）', $expiring_3);
+$html .= render_table('7天内到期（4~7天）', $expiring_7);
+$html .= render_table('已过期（过期时间在三天之内，方便复查）', $expired_3);
 $html .= "</div>";
-
 $cfg = [
     'host' => setting('smtp_host',''),
     'port' => (int)setting('smtp_port','587'),
@@ -151,6 +172,13 @@ foreach ($recipients as $to) {
         'to' => $to,
         'subject' => $subject,
         'html' => $html,
+        'attachments' => [
+            [
+                'filename' => $csvFilename,
+                'contentType' => 'text/csv; charset=UTF-8',
+                'content' => $csvWithBom,
+            ],
+        ],
     ]);
     if (!$result['success']) {
         $anyFail = true;

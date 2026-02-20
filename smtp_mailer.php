@@ -113,23 +113,96 @@ function smtp_send_mail(array $cfg): array {
     [$ok, $dataResp] = $expect([354], 'DATA');
     if (!$ok) return ['success'=>false, 'message'=>$dataResp];
 
-    $boundary = 'b' . bin2hex(random_bytes(8));
+    $attachments = $cfg['attachments'] ?? [];
+
     $headers = [];
     $headers[] = 'MIME-Version: 1.0';
     $headers[] = 'From: ' . mb_encode_mimeheader($fromName, 'UTF-8') . " <{$fromEmail}>";
     $headers[] = "To: <{$to}>";
     $headers[] = 'Subject: ' . mb_encode_mimeheader($subject, 'UTF-8');
-    $headers[] = 'Content-Type: multipart/alternative; boundary="' . $boundary . '"';
 
-    $body = "--$boundary\r\n";
-    $body .= "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
-    $body .= $text . "\r\n\r\n";
-    $body .= "--$boundary\r\n";
-    $body .= "Content-Type: text/html; charset=UTF-8\r\n\r\n";
-    $body .= $html . "\r\n\r\n";
-    $body .= "--$boundary--\r\n";
+    $altBoundary = 'alt' . bin2hex(random_bytes(8));
 
-    $message = implode("\r\n", $headers) . "\r\n\r\n" . $body;
+    if (is_array($attachments) && count($attachments) > 0) {
+        $mixedBoundary = 'mix' . bin2hex(random_bytes(8));
+        $headers[] = 'Content-Type: multipart/mixed; boundary="' . $mixedBoundary . '"';
+
+        $body = "--$mixedBoundary
+";
+        $body .= 'Content-Type: multipart/alternative; boundary="' . $altBoundary . '"' . "
+
+";
+
+        // alternative: text + html
+        $body .= "--$altBoundary
+";
+        $body .= "Content-Type: text/plain; charset=UTF-8
+
+" . $text . "
+
+";
+        $body .= "--$altBoundary
+";
+        $body .= "Content-Type: text/html; charset=UTF-8
+
+" . $html . "
+
+";
+        $body .= "--$altBoundary--
+";
+
+        // attachments
+        foreach ($attachments as $att) {
+            if (!is_array($att)) continue;
+            $filename = $att['filename'] ?? 'attachment.bin';
+            $ctype = $att['contentType'] ?? 'application/octet-stream';
+            $content = $att['content'] ?? '';
+            if ($content === '') continue;
+
+            $body .= "
+--$mixedBoundary
+";
+            $body .= 'Content-Type: ' . $ctype . '; name="' . addslashes($filename) . '"' . "
+";
+            $body .= 'Content-Transfer-Encoding: base64' . "
+";
+            $body .= 'Content-Disposition: attachment; filename="' . addslashes($filename) . '"' . "
+
+";
+            $body .= chunk_split(base64_encode($content), 76, "
+");
+        }
+
+        $body .= "
+--$mixedBoundary--
+";
+    } else {
+        $headers[] = 'Content-Type: multipart/alternative; boundary="' . $altBoundary . '"';
+
+        $body = "--$altBoundary
+";
+        $body .= "Content-Type: text/plain; charset=UTF-8
+
+";
+        $body .= $text . "
+
+";
+        $body .= "--$altBoundary
+";
+        $body .= "Content-Type: text/html; charset=UTF-8
+
+";
+        $body .= $html . "
+
+";
+        $body .= "--$altBoundary--
+";
+    }
+
+    $message = implode("
+", $headers) . "
+
+" . $body;
     // dot-stuffing
     $message = preg_replace('/\r\n\./', "\r\n..", $message);
 
