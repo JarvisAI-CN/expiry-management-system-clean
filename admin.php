@@ -677,24 +677,45 @@ if (isset($_GET['api'])) {
                                 <div class="col-4">
                                     <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">应用批量设置</button>
                                 </div>
-                            </div>
-                            
-                            <!-- 搜索和筛选 -->
+                            <!-- 筛选区域 -->
                             <div class="row g-2 mb-3">
-                                <div class="col-6">
+                                <div class="col-4">
                                     <input type="text" id="skuSearchInput" class="form-control form-control-sm" placeholder="搜索SKU或商品名...">
                                 </div>
-                                <div class="col-6">
+                                <div class="col-4">
                                     <select id="categoryFilter" class="form-select form-select-sm">
-                                        <option value="">所有分类</option>
+                                        <option value="">📂 按公司分类筛选</option>
                                         <option value="none">未分类</option>
                                     </select>
                                 </div>
+                                <div class="col-4">
+                                    <button class="btn btn-sm btn-outline-primary w-100" onclick="loadSkuTodos(1)">🔄 刷新列表</button>
+                                </div>
                             </div>
                             
-                            <div class="table-responsive">
+                            <!-- 批量设置区域 -->
+                            <div class="row g-2 mb-3">
+                                <div class="col-4">
+                                    <select id="batchCategory" class="form-select form-select-sm">
+                                        <option value="">📦 绑定系统分类...</option>
+                                    </select>
+                                </div>
+                                <div class="col-4">
+                                    <select id="batchCycle" class="form-select form-select-sm">
+                                        <option value="">⏰ 设置盘点频次...</option>
+                                        <option value="weekly">每周</option>
+                                        <option value="monthly">每月</option>
+                                        <option value="quarterly">每季</option>
+                                        <option value="yearly">每年</option>
+                                        <option value="none">🔴 不盘点</option>
+                                    </select>
+                                </div>
+                                <div class="col-4">
+                                    <button id="applyBatchBtn" class="btn btn-sm btn-success w-100">✅ 应用批量设置</button>
+                                </div>
+                            </div>
                                 <table class="table table-hover">
-                                    <thead><tr><th><input type="checkbox" id="selectAllSku"></th><th>SKU</th><th>商品名</th><th>分类</th><th>盘点频次</th><th>状态</th><th>操作</th></tr></thead>
+                                    <thead><tr><th><input type="checkbox" id="selectAllSku"></th><th>SKU</th><th>商品名</th><th>公司分类</th><th>系统分类</th><th>盘点频次</th><th>状态</th><th>操作</th></tr></thead>
                                     <tbody id="skuListBody"></tbody>
                                 </table>
                             </div>
@@ -875,12 +896,27 @@ if (isset($_GET['api'])) {
                     tbody.innerHTML = d.data.map(item => {
                         const categorySelect = document.getElementById('batchCategory')?.innerHTML ||
                             '<option value="">无分类</option>';
+                        
+                        // 公司分类（只读）
+                        const companyCategory = item.category_name || '-';
+                        
+                        // 系统分类（可编辑）
+                        const systemCategorySelect = categorySelect.replace(
+                            `value="${item.category_id}"`, 
+                            `value="${item.category_id}" selected`
+                        );
+                        
                         return `<tr>
                             <td><input type="checkbox" class="sku-checkbox" data-id="${item.id}"></td>
                             <td><code>${item.sku}</code></td>
                             <td>${item.name}</td>
                             <td>
-                                <small class="text-muted">${item.category_name || '-'}</small>
+                                <small class="text-muted">📂 ${companyCategory}</small>
+                            </td>
+                            <td>
+                                <select class="form-select form-select-sm" onchange="updateSkuTodo(${item.id}, 'category', this.value)">
+                                    ${systemCategorySelect}
+                                </select>
                             </td>
                             <td><select class="form-select form-select-sm" onchange="updateSkuTodo(${item.id}, 'cycle', this.value)">
                                 <option value="weekly" ${item.inventory_cycle === 'weekly' ? 'selected' : ''}>每周</option>
