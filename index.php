@@ -402,13 +402,35 @@ if (isset($_GET['api'])) {
 
             <!-- 手动输入 / 模糊搜索（扫码失败备用） -->
             <div class="custom-card mb-3">
-                <div class="fw-bold mb-2">手动输入 / 模糊搜索</div>
+                <div class="fw-bold mb-2">📝 手动输入 / 粘贴二维码</div>
+                
+                <!-- 快速粘贴区 -->
+                <div class="mb-2">
+                    <input id="qrPasteInput" 
+                           class="form-control" 
+                           placeholder="📋 用微信扫码后，直接粘贴URL到这里（支持星巴克URL、纯数字码、SKU）">
+                    <button id="qrPasteBtn" class="btn btn-success btn-sm w-100 mt-2">
+                        ✅ 解析粘贴的内容
+                    </button>
+                </div>
+                
+                <hr class="my-2">
+                
+                <!-- 搜索区 -->
                 <div class="input-group">
                     <input id="manualSearchInput" class="form-control" placeholder="输入SKU片段或品名关键词…">
-                    <button id="manualSearchBtn" class="btn btn-outline-primary" type="button">搜索</button>
+                    <button id="manualSearchBtn" class="btn btn-outline-primary" type="button">🔍 搜索</button>
                 </div>
                 <div id="manualSearchResults" class="mt-2"></div>
-                <div class="text-muted small mt-2">提示：也可以直接粘贴整段二维码内容（包含 #）再搜索。</div>
+                <div class="text-muted small mt-2">
+                    <strong>提示：</strong>
+                    <ul class="mb-0 ps-3">
+                        <li>微信扫码后，复制URL粘贴到上面的输入框</li>
+                        <li>支持星巴克URL：https://artwork.starbucks.com.cn/...</li>
+                        <li>支持纯数字码：001117979820251124#20251124#20260523</li>
+                        <li>支持纯SKU：11179798</li>
+                    </ul>
+                </div>
             </div>
 
             <div id="pendingList"></div>
@@ -542,6 +564,32 @@ if (isset($_GET['api'])) {
                     manualSearch();
                 }
             });
+
+            // 粘贴二维码URL后解析
+            document.getElementById('qrPasteBtn')?.addEventListener('click', ()=>{
+                const input = document.getElementById('qrPasteInput');
+                const qrCode = input.value.trim();
+                
+                if (!qrCode) {
+                    showAlert('请先粘贴二维码URL或内容', 'warning');
+                    return;
+                }
+
+                // 直接调用searchSKU解析
+                searchSKU(qrCode);
+                
+                // 清空输入框
+                input.value = '';
+            });
+            
+            // 粘贴输入框支持回车触发
+            document.getElementById('qrPasteInput')?.addEventListener('keydown', (e)=>{
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.getElementById('qrPasteBtn').click();
+                }
+            });
+
             document.getElementById('confirmEntryBtn')?.addEventListener('click', ()=>{
                 const batches = []; 
                 document.querySelectorAll('.batch-row').forEach(r=>{ 
