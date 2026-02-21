@@ -1,5 +1,33 @@
 # 更新日志 (CHANGELOG)
 
+## [v2.15.0] - 2026-02-21
+
+### 🆕 新增功能 - 编辑盘点单功能（重大更新）
+- ✅ 新增编辑盘点单功能，允许用户修改已创建的盘点单
+- ✅ 实现了4个核心API接口：get_editable_session、update_batch、delete_batch、add_to_session
+- ✅ 添加了完整的编辑界面，包括数量修改、日期修改、删除和添加商品功能
+- ✅ 创建了inventory_edit_logs审计日志表，记录所有编辑操作
+- ✅ 为batches表添加了updated_at字段，追踪批次更新时间
+- ✅ 为users表添加了is_admin字段，实现管理员权限控制
+
+### 🔒 安全性增强
+- ✅ SQL注入防护：所有查询使用prepared statements
+- ✅ 权限控制：只有创建者或管理员可以编辑盘点单
+- ✅ 数据验证：数量必须大于0，日期格式必须正确
+- ✅ 事务处理：所有修改操作在事务中执行，失败自动回滚
+
+### 🧪 测试和质量保证
+- ✅ 创建了完整的测试脚本，12项基础测试全部通过
+- ✅ 进行了代码审计，确认安全性和代码质量
+- ✅ 编写了完整的文档：架构设计、API规范、实施指南、审计报告
+
+### 📚 文档更新
+- ✅ ARCHITECT_EDIT_INVENTORY.md - 完整的架构设计文档
+- ✅ API_SPEC_EDIT_INVENTORY.md - API接口详细规范
+- ✅ IMPLEMENTATION_GUIDE.md - 详细的实现指南
+- ✅ CODE_AUDIT_REPORT.md - 代码审计报告
+- ✅ EDIT_INVENTORY_SUMMARY.md - 功能总结文档
+
 ## [v2.13.1] - 2026-02-21
 
 ### 🔒 安全修复（重要！）
