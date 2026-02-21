@@ -99,8 +99,8 @@ if (isset($_GET['api'])) {
 
     checkAuth();
     
-    if ($action === 'search_products') {
-        $q = trim($_GET['q'] ?? '');
+    if ($action === 'search_products' || $action === 'manual_search') {
+        $q = trim($_GET['q'] ?? trim($_GET['sku'] ?? ''));
         if ($q === '') {
             echo json_encode(['success' => true, 'data' => []]);
             exit;
@@ -1749,9 +1749,9 @@ if (isset($_GET['api'])) {
                 // 绑定SKU输入框事件
                 const skuInput = document.getElementById('editAddSkuInput');
                 skuInput.addEventListener('input', function() {
-                    const sku = this.value.trim();
-                    if (sku.length >= 3) {
-                        searchEditProductSku(sku);
+                    const q = this.value.trim();
+                    if (q.length >= 1) { // 减少搜索触发条件
+                        searchEditProductSku(q);
                     } else {
                         document.getElementById('editAddSkuSuggestions').style.display = 'none';
                     }
@@ -1765,18 +1765,18 @@ if (isset($_GET['api'])) {
             // 重置表单
             document.getElementById('editAddSkuInput').value = '';
             document.getElementById('editAddProductInfo').style.display = 'none';
-            document.getElementById('editAddBatchContainer').style.display = 'none';
+            document.getElementById('editAddBatchContainer').style.display = 'block'; // 默认为显示
             document.getElementById('editAddSkuSuggestions').style.display = 'none';
             document.getElementById('editAddExpiryDate').value = '';
             document.getElementById('editAddQuantity').value = '1';
         }
 
         /**
-         * 模糊搜索SKU
+         * 模糊搜索商品（支持SKU和商品名称）
          */
-        async function searchEditProductSku(sku) {
+        async function searchEditProductSku(q) {
             try {
-                const res = await fetch(`index.php?api=manual_search&sku=${encodeURIComponent(sku)}`);
+                const res = await fetch(`index.php?api=search_products&q=${encodeURIComponent(q)}`);
                 const d = await res.json();
 
                 const suggestionsDiv = document.getElementById('editAddSkuSuggestions');
