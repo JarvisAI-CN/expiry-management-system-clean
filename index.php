@@ -10,7 +10,7 @@
  */
 
 // 升级配置 - 使用安全的内网源
-define('APP_VERSION', '2.13.2');
+define('APP_VERSION', '2.13.3');
 define('UPDATE_URL', null); // 禁用外部自动升级，改用手动升级
 define('UPDATE_SERVER', 'feishu'); // 从飞书获取升级包
 
