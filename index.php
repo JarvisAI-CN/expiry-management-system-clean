@@ -228,22 +228,25 @@ if (isset($_GET['api'])) {
     }
     
     if ($action === 'send_inventory_email') {
+        // 引入调试日志工具
+        require_once __DIR__ . '/debug_log.php';
+        
         // 添加详细的调试日志
-        error_log('send_inventory_email API called: ' . date('Y-m-d H:i:s'));
+        debugLog('send_inventory_email API called', 'API');
         
         // 获取POST数据
         $rawInput = file_get_contents('php://input');
-        error_log('Raw input: ' . $rawInput);
+        debugLog('Raw input: ' . $rawInput, 'API');
         
         $input = json_decode($rawInput, true);
-        error_log('Decoded input: ' . print_r($input, true));
+        debugLog('Decoded input: ' . print_r($input, true), 'API');
         
         $subject = $input['subject'] ?? '盘点单汇总';
         $body = $input['body'] ?? '';
         
         if (empty($body)) {
             $errorMsg = '缺少必要参数';
-            error_log('Error: ' . $errorMsg);
+            debugLog('Error: ' . $errorMsg, 'API');
             echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
@@ -257,11 +260,11 @@ if (isset($_GET['api'])) {
             $to = $row['s_value'];
         }
         
-        error_log('Default recipient: ' . $to);
+        debugLog('Default recipient: ' . $to, 'API');
         
         if (empty($to)) {
             $errorMsg = '未设置默认收件邮箱，请在后台"AI配置"页面的"盘点单邮件设置"中配置';
-            error_log('Error: ' . $errorMsg);
+            debugLog('Error: ' . $errorMsg, 'API');
             echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
@@ -269,7 +272,7 @@ if (isset($_GET['api'])) {
         // 引入邮件发送功能
         if (!file_exists(__DIR__ . '/email_functions.php')) {
             $errorMsg = '邮件功能文件缺失（email_functions.php），请先运行升级脚本';
-            error_log('Error: ' . $errorMsg);
+            debugLog('Error: ' . $errorMsg, 'API');
             echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
@@ -285,29 +288,396 @@ if (isset($_GET['api'])) {
             $emailCount = $row['cnt'];
         }
         
-        error_log('Active email accounts: ' . $emailCount);
+        debugLog('Active email accounts: ' . $emailCount, 'API');
         
         if ($emailCount === 0) {
             $errorMsg = '没有可用的邮箱账户，请在后台"邮箱配置"中添加QQ邮箱账户';
-            error_log('Error: ' . $errorMsg);
+            debugLog('Error: ' . $errorMsg, 'API');
             echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
         
         // 使用邮件发送函数
-        error_log('Calling sendSmtpEmail to: ' . $to . ', subject: ' . $subject);
+        debugLog('Calling sendSmtpEmail to: ' . $to . ', subject: ' . $subject, 'API');
         $result = sendSmtpEmail($to, $subject, $body);
-        error_log('sendSmtpEmail result: ' . print_r($result, true));
+        debugLog('sendSmtpEmail result: ' . print_r($result, true), 'API');
         
         if ($result['success']) {
             $successMsg = '邮件发送成功';
-            error_log('Success: ' . $successMsg);
+            debugLog('Success: ' . $successMsg, 'API');
             echo json_encode(['success'=>true, 'message'=>$successMsg]);
         } else {
             $errorMsg = $result['message'] ?? '发送失败';
             $errorDetails = $result['error'] ?? '';
-            error_log('Error: ' . $errorMsg . ', Details: ' . $errorDetails);
+            debugLog('Error: ' . $errorMsg . ', Details: ' . $errorDetails, 'API');
             echo json_encode(['success'=>false, 'message'=>$errorMsg, 'error'=>$errorDetails]);
+        }
+        exit;
+    }
+    
+    // ========================================
+    // 编辑盘点单功能 API
+    // ========================================
+
+    if ($action === 'get_editable_session') {
+        // 获取可编辑的盘点单详情
+        $session_id = $_GET['session_id'] ?? '';
+        
+        if (empty($session_id)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少session_id参数']);
+            exit;
+        }
+        
+        // 检查权限
+        $stmt = $conn->prepare("SELECT user_id FROM inventory_sessions WHERE session_key = ?");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        $session_result = $stmt->get_result();
+        
+        if ($session_result->num_rows === 0) {
+            echo json_encode(['success'=>false, 'message'=>'盘点单不存在']);
+            exit;
+        }
+        
+        $session = $session_result->fetch_assoc();
+        if ($session['user_id'] != $_SESSION['user_id']) {
+            // 检查是否是管理员
+            $stmt = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $stmt->bind_param("i", $_SESSION['user_id']);
+            $stmt->execute();
+            $user_result = $stmt->get_result();
+            $user = $user_result->fetch_assoc();
+            
+            if (!($user && $user['is_admin'])) {
+                echo json_encode(['success'=>false, 'message'=>'您无权限编辑此盘点单']);
+                exit;
+            }
+        }
+        
+        // 获取盘点单详情（包含batch_id）
+        $stmt = $conn->prepare("SELECT b.id as batch_id, p.sku, p.name, b.expiry_date, b.quantity, p.removal_buffer 
+                                 FROM batches b 
+                                 JOIN products p ON b.product_id = p.id 
+                                 WHERE b.session_id = ? 
+                                 ORDER BY DATE_SUB(b.expiry_date, INTERVAL p.removal_buffer DAY) ASC");
+        $stmt->bind_param("s", $session_id); 
+        $stmt->execute();
+        $res = $stmt->get_result(); 
+        $list = []; 
+        while($r = $res->fetch_assoc()) {
+            $list[] = $r;
+        }
+        
+        echo json_encode([
+            'success'=>true, 
+            'data'=>[
+                'session_key' => $session_id,
+                'created_at' => (new DateTime())->format('Y-m-d H:i:s'),
+                'item_count' => count($list),
+                'items' => $list
+            ]
+        ]); 
+        exit;
+    }
+    
+    if ($action === 'update_batch') {
+        // 更新批次信息
+        $input = json_decode(file_get_contents('php://input'), true);
+        $batch_id = $input['batch_id'] ?? '';
+        $expiry_date = $input['expiry_date'] ?? '';
+        $quantity = $input['quantity'] ?? '';
+        
+        if (empty($batch_id)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少batch_id参数']);
+            exit;
+        }
+        
+        if (empty($expiry_date) || empty($quantity)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少必要参数']);
+            exit;
+        }
+        
+        if ($quantity <= 0) {
+            echo json_encode(['success'=>false, 'message'=>'数量必须大于0']);
+            exit;
+        }
+        
+        // 验证日期格式
+        $date_obj = DateTime::createFromFormat('Y-m-d', $expiry_date);
+        if (!$date_obj || $date_obj->format('Y-m-d') != $expiry_date) {
+            echo json_encode(['success'=>false, 'message'=>'日期格式无效']);
+            exit;
+        }
+        
+        // 检查批次是否属于当前用户的盘点单
+        $stmt = $conn->prepare("SELECT b.session_id, s.user_id FROM batches b 
+                                 JOIN inventory_sessions s ON b.session_id = s.session_key 
+                                 WHERE b.id = ?");
+        $stmt->bind_param("i", $batch_id);
+        $stmt->execute();
+        $batch_result = $stmt->get_result();
+        
+        if ($batch_result->num_rows === 0) {
+            echo json_encode(['success'=>false, 'message'=>'批次不存在']);
+            exit;
+        }
+        
+        $batch_info = $batch_result->fetch_assoc();
+        
+        // 检查权限
+        if ($batch_info['user_id'] != $_SESSION['user_id']) {
+            // 检查是否是管理员
+            $stmt = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $stmt->bind_param("i", $_SESSION['user_id']);
+            $stmt->execute();
+            $user_result = $stmt->get_result();
+            $user = $user_result->fetch_assoc();
+            
+            if (!($user && $user['is_admin'])) {
+                echo json_encode(['success'=>false, 'message'=>'您无权限编辑此批次']);
+                exit;
+            }
+        }
+        
+        // 开始事务
+        $conn->begin_transaction();
+        
+        try {
+            // 获取原数据（用于审计日志）
+            $stmt = $conn->prepare("SELECT * FROM batches WHERE id = ?");
+            $stmt->bind_param("i", $batch_id);
+            $stmt->execute();
+            $old_batch = $stmt->get_result()->fetch_assoc();
+            
+            // 更新批次信息
+            $stmt = $conn->prepare("UPDATE batches SET expiry_date = ?, quantity = ?, updated_at = NOW() WHERE id = ?");
+            $stmt->bind_param("sii", $expiry_date, $quantity, $batch_id);
+            $stmt->execute();
+            
+            // 获取新数据（用于审计日志）
+            $stmt = $conn->prepare("SELECT * FROM batches WHERE id = ?");
+            $stmt->bind_param("i", $batch_id);
+            $stmt->execute();
+            $new_batch = $stmt->get_result()->fetch_assoc();
+            
+            // 记录审计日志
+            $stmt = $conn->prepare("INSERT INTO inventory_edit_logs (session_id, batch_id, action, old_value, new_value, user_id) 
+                                     VALUES (?, ?, 'update', ?, ?, ?)");
+            $old_json = json_encode($old_batch);
+            $new_json = json_encode($new_batch);
+            $stmt->bind_param("siisi", $batch_info['session_id'], $batch_id, $old_json, $new_json, $_SESSION['user_id']);
+            $stmt->execute();
+            
+            // 更新盘点单的商品数量
+            $stmt = $conn->prepare("SELECT COUNT(*) as count FROM batches WHERE session_id = ?");
+            $stmt->bind_param("s", $batch_info['session_id']);
+            $stmt->execute();
+            $count_result = $stmt->get_result();
+            $count = $count_result->fetch_assoc()['count'];
+            
+            $stmt = $conn->prepare("UPDATE inventory_sessions SET item_count = ? WHERE session_key = ?");
+            $stmt->bind_param("is", $count, $batch_info['session_id']);
+            $stmt->execute();
+            
+            $conn->commit();
+            echo json_encode(['success'=>true, 'message'=>'批次更新成功']);
+        } catch (Exception $e) {
+            $conn->rollback();
+            echo json_encode(['success'=>false, 'message'=>'更新失败: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+    
+    if ($action === 'delete_batch') {
+        // 删除批次
+        $input = json_decode(file_get_contents('php://input'), true);
+        $batch_id = $input['batch_id'] ?? '';
+        
+        if (empty($batch_id)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少batch_id参数']);
+            exit;
+        }
+        
+        // 检查批次是否属于当前用户的盘点单
+        $stmt = $conn->prepare("SELECT b.session_id, s.user_id FROM batches b 
+                                 JOIN inventory_sessions s ON b.session_id = s.session_key 
+                                 WHERE b.id = ?");
+        $stmt->bind_param("i", $batch_id);
+        $stmt->execute();
+        $batch_result = $stmt->get_result();
+        
+        if ($batch_result->num_rows === 0) {
+            echo json_encode(['success'=>false, 'message'=>'批次不存在']);
+            exit;
+        }
+        
+        $batch_info = $batch_result->fetch_assoc();
+        
+        // 检查权限
+        if ($batch_info['user_id'] != $_SESSION['user_id']) {
+            // 检查是否是管理员
+            $stmt = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $stmt->bind_param("i", $_SESSION['user_id']);
+            $stmt->execute();
+            $user_result = $stmt->get_result();
+            $user = $user_result->fetch_assoc();
+            
+            if (!($user && $user['is_admin'])) {
+                echo json_encode(['success'=>false, 'message'=>'您无权限删除此批次']);
+                exit;
+            }
+        }
+        
+        // 开始事务
+        $conn->begin_transaction();
+        
+        try {
+            // 获取原数据（用于审计日志）
+            $stmt = $conn->prepare("SELECT * FROM batches WHERE id = ?");
+            $stmt->bind_param("i", $batch_id);
+            $stmt->execute();
+            $old_batch = $stmt->get_result()->fetch_assoc();
+            
+            // 删除批次
+            $stmt = $conn->prepare("DELETE FROM batches WHERE id = ?");
+            $stmt->bind_param("i", $batch_id);
+            $stmt->execute();
+            
+            // 记录审计日志
+            $stmt = $conn->prepare("INSERT INTO inventory_edit_logs (session_id, batch_id, action, old_value, new_value, user_id) 
+                                     VALUES (?, ?, 'delete', ?, NULL, ?)");
+            $old_json = json_encode($old_batch);
+            $stmt->bind_param("siisi", $batch_info['session_id'], $batch_id, $old_json, $_SESSION['user_id']);
+            $stmt->execute();
+            
+            // 更新盘点单的商品数量
+            $stmt = $conn->prepare("SELECT COUNT(*) as count FROM batches WHERE session_id = ?");
+            $stmt->bind_param("s", $batch_info['session_id']);
+            $stmt->execute();
+            $count_result = $stmt->get_result();
+            $count = $count_result->fetch_assoc()['count'];
+            
+            $stmt = $conn->prepare("UPDATE inventory_sessions SET item_count = ? WHERE session_key = ?");
+            $stmt->bind_param("is", $count, $batch_info['session_id']);
+            $stmt->execute();
+            
+            $conn->commit();
+            echo json_encode(['success'=>true, 'message'=>'批次删除成功']);
+        } catch (Exception $e) {
+            $conn->rollback();
+            echo json_encode(['success'=>false, 'message'=>'删除失败: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+    
+    if ($action === 'add_to_session') {
+        // 添加商品到盘点单
+        $input = json_decode(file_get_contents('php://input'), true);
+        $session_id = $input['session_id'] ?? '';
+        $sku = $input['sku'] ?? '';
+        $batches = $input['batches'] ?? [];
+        
+        if (empty($session_id) || empty($sku) || empty($batches)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少必要参数']);
+            exit;
+        }
+        
+        // 检查盘点单是否存在
+        $stmt = $conn->prepare("SELECT id, user_id FROM inventory_sessions WHERE session_key = ?");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        $session_result = $stmt->get_result();
+        
+        if ($session_result->num_rows === 0) {
+            echo json_encode(['success'=>false, 'message'=>'盘点单不存在']);
+            exit;
+        }
+        
+        $session = $session_result->fetch_assoc();
+        
+        // 检查权限
+        if ($session['user_id'] != $_SESSION['user_id']) {
+            // 检查是否是管理员
+            $stmt = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $stmt->bind_param("i", $_SESSION['user_id']);
+            $stmt->execute();
+            $user_result = $stmt->get_result();
+            $user = $user_result->fetch_assoc();
+            
+            if (!($user && $user['is_admin'])) {
+                echo json_encode(['success'=>false, 'message'=>'您无权限编辑此盘点单']);
+                exit;
+            }
+        }
+        
+        // 开始事务
+        $conn->begin_transaction();
+        
+        try {
+            // 检查商品是否存在
+            $stmt = $conn->prepare("SELECT id FROM products WHERE sku = ?");
+            $stmt->bind_param("s", $sku);
+            $stmt->execute();
+            $product_result = $stmt->get_result();
+            
+            $product_id = 0;
+            if ($product_result->num_rows > 0) {
+                $product_id = $product_result->fetch_assoc()['id'];
+            } else {
+                // 商品不存在，创建新商品（使用默认信息）
+                $stmt = $conn->prepare("INSERT INTO products (sku, name) VALUES (?, ?)");
+                $default_name = '未命名商品';
+                $stmt->bind_param("ss", $sku, $default_name);
+                $stmt->execute();
+                $product_id = $conn->insert_id;
+            }
+            
+            // 添加批次
+            foreach ($batches as $batch) {
+                $expiry_date = $batch['expiry_date'] ?? '';
+                $quantity = $batch['quantity'] ?? 0;
+                
+                if (empty($expiry_date) || $quantity <= 0) {
+                    continue;
+                }
+                
+                $stmt = $conn->prepare("INSERT INTO batches (product_id, expiry_date, quantity, session_id) VALUES (?, ?, ?, ?)");
+                $stmt->bind_param("isii", $product_id, $expiry_date, $quantity, $session_id);
+                $stmt->execute();
+                
+                $new_batch_id = $conn->insert_id;
+                
+                // 记录审计日志
+                $stmt = $conn->prepare("INSERT INTO inventory_edit_logs (session_id, batch_id, action, old_value, new_value, user_id) 
+                                         VALUES (?, ?, 'add', NULL, ?, ?)");
+                $new_batch = [
+                    'id' => $new_batch_id,
+                    'product_id' => $product_id,
+                    'expiry_date' => $expiry_date,
+                    'quantity' => $quantity,
+                    'session_id' => $session_id
+                ];
+                $new_json = json_encode($new_batch);
+                $stmt->bind_param("siisi", $session_id, $new_batch_id, $new_json, $_SESSION['user_id']);
+                $stmt->execute();
+            }
+            
+            // 更新盘点单的商品数量
+            $stmt = $conn->prepare("SELECT COUNT(*) as count FROM batches WHERE session_id = ?");
+            $stmt->bind_param("s", $session_id);
+            $stmt->execute();
+            $count_result = $stmt->get_result();
+            $count = $count_result->fetch_assoc()['count'];
+            
+            $stmt = $conn->prepare("UPDATE inventory_sessions SET item_count = ? WHERE session_key = ?");
+            $stmt->bind_param("is", $count, $session_id);
+            $stmt->execute();
+            
+            $conn->commit();
+            echo json_encode(['success'=>true, 'message'=>'商品添加成功']);
+        } catch (Exception $e) {
+            $conn->rollback();
+            echo json_encode(['success'=>false, 'message'=>'添加失败: ' . $e->getMessage()]);
         }
         exit;
     }
@@ -347,6 +717,368 @@ if (isset($_GET['api'])) {
             echo json_encode(['success'=>true, 'message'=>'盘点单删除成功']);
         } else {
             echo json_encode(['success'=>false, 'message'=>'删除失败，请稍后重试']);
+        }
+        exit;
+    }
+
+    // ========================================
+    // 编辑盘点单功能 API
+    // ========================================
+
+    /**
+     * 获取可编辑的盘点单详情
+     */
+    if ($action === 'get_editable_session') {
+        $session_id = $_GET['session_id'] ?? '';
+
+        if (empty($session_id)) {
+            echo json_encode(['success' => false, 'message' => '缺少session_id参数']);
+            exit;
+        }
+
+        // 验证权限：只能编辑自己创建的盘点单，或管理员可以编辑所有
+        $stmt = $conn->prepare("SELECT user_id FROM inventory_sessions WHERE session_key = ?");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        $session = $stmt->get_result()->fetch_assoc();
+
+        if (!$session) {
+            echo json_encode(['success' => false, 'message' => '盘点单不存在']);
+            exit;
+        }
+
+        // 检查是否是管理员
+        $adminCheck = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+        $adminCheck->bind_param("i", $_SESSION['user_id']);
+        $adminCheck->execute();
+        $isAdmin = $adminCheck->get_result()->fetch_assoc()['is_admin'] ?? 0;
+
+        if ($session['user_id'] != $_SESSION['user_id'] && !$isAdmin) {
+            echo json_encode(['success' => false, 'message' => '无权编辑此盘点单']);
+            exit;
+        }
+
+        // 获取盘点单详情
+        $stmt = $conn->prepare("SELECT p.sku, p.name, p.removal_buffer, b.id as batch_id,
+                                       b.expiry_date, b.quantity
+                                FROM batches b
+                                JOIN products p ON b.product_id = p.id
+                                WHERE b.session_id = ?
+                                ORDER BY b.expiry_date ASC");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        $items = [];
+        while ($row = $result->fetch_assoc()) {
+            $items[] = $row;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'data' => [
+                'session_id' => $session_id,
+                'items' => $items,
+                'item_count' => count($items)
+            ]
+        ]);
+        exit;
+    }
+
+    /**
+     * 更新批次信息
+     */
+    if ($action === 'update_batch') {
+        $data = json_decode(file_get_contents('php://input'), true);
+
+        $batch_id = intval($data['batch_id'] ?? 0);
+        $expiry_date = $data['expiry_date'] ?? '';
+        $quantity = intval($data['quantity'] ?? 0);
+
+        if (!$batch_id) {
+            echo json_encode(['success' => false, 'message' => '批次ID无效']);
+            exit;
+        }
+
+        if ($quantity <= 0) {
+            echo json_encode(['success' => false, 'message' => '数量必须大于0']);
+            exit;
+        }
+
+        if (empty($expiry_date)) {
+            echo json_encode(['success' => false, 'message' => '有效期不能为空']);
+            exit;
+        }
+
+        // 验证日期格式
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $expiry_date)) {
+            echo json_encode(['success' => false, 'message' => '日期格式错误，应为YYYY-MM-DD']);
+            exit;
+        }
+
+        $conn->begin_transaction();
+
+        try {
+            // 获取当前批次信息（用于审计日志）
+            $stmt = $conn->prepare("SELECT b.*, p.name as product_name, p.sku
+                                    FROM batches b
+                                    JOIN products p ON b.product_id = p.id
+                                    WHERE b.id = ?");
+            $stmt->bind_param("i", $batch_id);
+            $stmt->execute();
+            $old_batch = $stmt->get_result()->fetch_assoc();
+
+            if (!$old_batch) {
+                throw new Exception('批次不存在');
+            }
+
+            // 验证权限：只能编辑自己创建的盘点单，或管理员可以编辑所有
+            $sessionCheck = $conn->prepare("SELECT user_id FROM inventory_sessions WHERE session_key = ?");
+            $sessionCheck->bind_param("s", $old_batch['session_id']);
+            $sessionCheck->execute();
+            $session = $sessionCheck->get_result()->fetch_assoc();
+
+            $adminCheck = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $adminCheck->bind_param("i", $_SESSION['user_id']);
+            $adminCheck->execute();
+            $isAdmin = $adminCheck->get_result()->fetch_assoc()['is_admin'] ?? 0;
+
+            if ($session['user_id'] != $_SESSION['user_id'] && !$isAdmin) {
+                throw new Exception('无权编辑此批次');
+            }
+
+            // 更新批次信息
+            $updateStmt = $conn->prepare("UPDATE batches SET expiry_date = ?, quantity = ? WHERE id = ?");
+            $updateStmt->bind_param("sii", $expiry_date, $quantity, $batch_id);
+
+            if (!$updateStmt->execute()) {
+                throw new Exception('更新失败');
+            }
+
+            // 记录审计日志
+            $old_value = json_encode([
+                'expiry_date' => $old_batch['expiry_date'],
+                'quantity' => $old_batch['quantity']
+            ]);
+
+            $new_value = json_encode([
+                'expiry_date' => $expiry_date,
+                'quantity' => $quantity
+            ]);
+
+            $logStmt = $conn->prepare("INSERT INTO inventory_edit_logs
+                                       (session_id, batch_id, action, old_value, new_value, user_id)
+                                       VALUES (?, ?, 'update', ?, ?, ?)");
+            $logStmt->bind_param("sissi", $old_batch['session_id'], $batch_id, $old_value, $new_value, $_SESSION['user_id']);
+            $logStmt->execute();
+
+            $conn->commit();
+
+            echo json_encode([
+                'success' => true,
+                'message' => '批次信息已更新'
+            ]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+        exit;
+    }
+
+    /**
+     * 删除批次
+     */
+    if ($action === 'delete_batch') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $batch_id = intval($data['batch_id'] ?? 0);
+
+        if (!$batch_id) {
+            echo json_encode(['success' => false, 'message' => '批次ID无效']);
+            exit;
+        }
+
+        $conn->begin_transaction();
+
+        try {
+            // 获取批次信息（用于权限验证和审计日志）
+            $stmt = $conn->prepare("SELECT b.*, p.name as product_name, p.sku
+                                    FROM batches b
+                                    JOIN products p ON b.product_id = p.id
+                                    WHERE b.id = ?");
+            $stmt->bind_param("i", $batch_id);
+            $stmt->execute();
+            $batch = $stmt->get_result()->fetch_assoc();
+
+            if (!$batch) {
+                throw new Exception('批次不存在');
+            }
+
+            // 验证权限
+            $sessionCheck = $conn->prepare("SELECT user_id FROM inventory_sessions WHERE session_key = ?");
+            $sessionCheck->bind_param("s", $batch['session_id']);
+            $sessionCheck->execute();
+            $session = $sessionCheck->get_result()->fetch_assoc();
+
+            $adminCheck = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $adminCheck->bind_param("i", $_SESSION['user_id']);
+            $adminCheck->execute();
+            $isAdmin = $adminCheck->get_result()->fetch_assoc()['is_admin'] ?? 0;
+
+            if ($session['user_id'] != $_SESSION['user_id'] && !$isAdmin) {
+                throw new Exception('无权删除此批次');
+            }
+
+            // 删除批次
+            $deleteStmt = $conn->prepare("DELETE FROM batches WHERE id = ?");
+            $deleteStmt->bind_param("i", $batch_id);
+
+            if (!$deleteStmt->execute()) {
+                throw new Exception('删除失败');
+            }
+
+            // 记录审计日志
+            $old_value = json_encode([
+                'sku' => $batch['sku'],
+                'name' => $batch['product_name'],
+                'expiry_date' => $batch['expiry_date'],
+                'quantity' => $batch['quantity']
+            ]);
+
+            $logStmt = $conn->prepare("INSERT INTO inventory_edit_logs
+                                       (session_id, batch_id, action, old_value, user_id)
+                                       VALUES (?, ?, 'delete', ?, ?)");
+            $logStmt->bind_param("sisi", $batch['session_id'], $batch_id, $old_value, $_SESSION['user_id']);
+            $logStmt->execute();
+
+            $conn->commit();
+
+            echo json_encode([
+                'success' => true,
+                'message' => '批次已删除'
+            ]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
+        }
+        exit;
+    }
+
+    /**
+     * 添加商品到盘点单
+     */
+    if ($action === 'add_to_session') {
+        $data = json_decode(file_get_contents('php://input'), true);
+
+        $session_id = $data['session_id'] ?? '';
+        $sku = trim($data['sku'] ?? '');
+        $batches = $data['batches'] ?? [];
+
+        if (empty($session_id) || empty($sku) || empty($batches)) {
+            echo json_encode(['success' => false, 'message' => '缺少必要参数']);
+            exit;
+        }
+
+        $conn->begin_transaction();
+
+        try {
+            // 验证权限
+            $sessionCheck = $conn->prepare("SELECT user_id FROM inventory_sessions WHERE session_key = ?");
+            $sessionCheck->bind_param("s", $session_id);
+            $sessionCheck->execute();
+            $session = $sessionCheck->get_result()->fetch_assoc();
+
+            if (!$session) {
+                throw new Exception('盘点单不存在');
+            }
+
+            $adminCheck = $conn->prepare("SELECT is_admin FROM users WHERE id = ?");
+            $adminCheck->bind_param("i", $_SESSION['user_id']);
+            $adminCheck->execute();
+            $isAdmin = $adminCheck->get_result()->fetch_assoc()['is_admin'] ?? 0;
+
+            if ($session['user_id'] != $_SESSION['user_id'] && !$isAdmin) {
+                throw new Exception('无权编辑此盘点单');
+            }
+
+            // 查找或创建商品
+            $productStmt = $conn->prepare("SELECT id, name FROM products WHERE sku = ?");
+            $productStmt->bind_param("s", $sku);
+            $productStmt->execute();
+            $product = $productStmt->get_result()->fetch_assoc();
+
+            if (!$product) {
+                throw new Exception('商品SKU不存在，请先在系统中添加该商品');
+            }
+
+            $product_id = $product['id'];
+
+            // 添加批次
+            $insertStmt = $conn->prepare("INSERT INTO batches (product_id, expiry_date, quantity, session_id)
+                                          VALUES (?, ?, ?, ?)");
+            $insertStmt->bind_param("isis", $product_id, $expiry_date, $quantity, $session_id);
+
+            $added_batches = [];
+            foreach ($batches as $batch) {
+                $expiry_date = $batch['expiry_date'];
+                $quantity = intval($batch['quantity']);
+
+                if ($quantity <= 0) {
+                    throw new Exception('数量必须大于0');
+                }
+
+                if (!$insertStmt->execute()) {
+                    throw new Exception('添加批次失败');
+                }
+
+                $batch_id = $conn->insert_id;
+
+                // 记录审计日志
+                $new_value = json_encode([
+                    'sku' => $sku,
+                    'name' => $product['name'],
+                    'expiry_date' => $expiry_date,
+                    'quantity' => $quantity
+                ]);
+
+                $logStmt = $conn->prepare("INSERT INTO inventory_edit_logs
+                                           (session_id, batch_id, action, new_value, user_id)
+                                           VALUES (?, ?, 'add', ?, ?)");
+                $logStmt->bind_param("sisi", $session_id, $batch_id, $new_value, $_SESSION['user_id']);
+                $logStmt->execute();
+
+                $added_batches[] = [
+                    'batch_id' => $batch_id,
+                    'expiry_date' => $expiry_date,
+                    'quantity' => $quantity
+                ];
+            }
+
+            $conn->commit();
+
+            echo json_encode([
+                'success' => true,
+                'message' => '商品已添加',
+                'data' => [
+                    'sku' => $sku,
+                    'name' => $product['name'],
+                    'batches' => $added_batches
+                ]
+            ]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            echo json_encode([
+                'success' => false,
+                'message' => $e->getMessage()
+            ]);
         }
         exit;
     }
@@ -649,6 +1381,69 @@ if (isset($_GET['api'])) {
             </div>
         </div>
     </div>
+    
+    <!-- 编辑盘点单模态框 -->
+    <div class="modal fade" id="editModal">
+        <div class="modal-dialog modal-dialog-scrollable modal-lg">
+            <div class="modal-content" style="border-radius: 16px;">
+                <div class="modal-header border-bottom-0">
+                    <h5 class="fw-bold">编辑盘点单</h5>
+                    <button class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div class="p-3">
+                        <div id="editSessionInfo" class="mb-3"></div>
+                        <table class="table table-sm small mb-0" id="editSessionTable">
+                            <thead>
+                                <tr>
+                                    <th>商品SKU</th>
+                                    <th>商品名称</th>
+                                    <th>到期日期</th>
+                                    <th>数量</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="editSessionBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer border-top-0 pt-0">
+                    <button class="btn btn-outline-primary btn-sm" id="addProductBtn" onclick="showAddProductModal()">
+                        <i class="bi bi-plus-circle me-1"></i>添加商品
+                    </button>
+                    <button class="btn btn-primary btn-sm" id="saveEditBtn" onclick="saveEditSession()">
+                        <i class="bi bi-save me-1"></i>保存修改
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 添加商品到盘点单模态框 -->
+    <div class="modal fade" id="addProductModal">
+        <div class="modal-dialog">
+            <div class="modal-content" style="border-radius: 16px;">
+                <div class="modal-header border-bottom-0">
+                    <h5 class="fw-bold">添加商品到盘点单</h5>
+                    <button class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <form id="addProductForm">
+                        <div class="custom-card mb-2">
+                            <input type="text" class="form-control mb-2" id="addProductSku" placeholder="商品SKU" required>
+                            <div id="addProductBatchesContainer"></div>
+                            <button type="button" class="btn btn-outline-success btn-sm w-100" id="addProductBatchBtn">
+                                + 批次
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer border-top-0 d-grid">
+                    <button class="btn btn-primary" id="confirmAddProductBtn">确定添加</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let html5QrCode = null, currentSessionId = 'S'+Date.now(), pendingData = [];
@@ -790,6 +1585,229 @@ if (isset($_GET['api'])) {
             }
         }
         
+        async function editSession(sessionId, event) {
+            event.stopPropagation(); // 阻止触发卡片点击事件
+            
+            try {
+                const res = await fetch(`index.php?api=get_editable_session&session_id=${sessionId}`);
+                const d = await res.json();
+                
+                if (d.success) {
+                    displayEditSession(d.data);
+                    const modal = new bootstrap.Modal(document.getElementById('editModal'));
+                    modal.show();
+                } else {
+                    showAlert('❌ ' + (d.message || '获取盘点单详情失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('获取盘点单详情失败:', error);
+                showAlert('❌ 获取盘点单详情失败，请稍后重试', 'danger');
+            }
+        }
+        
+        function displayEditSession(data) {
+            // 保存当前正在编辑的盘点单数据
+            window.currentEditSession = data;
+            
+            // 显示盘点单信息
+            const infoDiv = document.getElementById('editSessionInfo');
+            infoDiv.innerHTML = `
+                <div class="custom-card">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>单号: ${data.session_key}</strong>
+                            <br><small class="text-muted">${data.created_at}</small>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-primary">${data.item_count} 件</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // 显示商品列表
+            const tbody = document.getElementById('editSessionBody');
+            tbody.innerHTML = '';
+            
+            data.items.forEach(item => {
+                const row = document.createElement('tr');
+                row.className = 'edit-item-row';
+                row.dataset.batchId = item.batch_id;
+                row.innerHTML = `
+                    <td>${item.sku}</td>
+                    <td>${item.name}</td>
+                    <td><input type="date" class="form-control form-control-sm expiry-input" value="${item.expiry_date}" data-batch-id="${item.batch_id}"></td>
+                    <td><input type="number" class="form-control form-control-sm quantity-input" value="${item.quantity}" min="1" data-batch-id="${item.batch_id}"></td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger delete-batch-btn" onclick="deleteBatch(${item.batch_id})" data-batch-id="${item.batch_id}">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        async function deleteBatch(batchId) {
+            if (!confirm('确定要删除这个批次吗？')) {
+                return;
+            }
+            
+            try {
+                const res = await fetch('index.php?api=delete_batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ batch_id: batchId })
+                });
+                
+                const d = await res.json();
+                
+                if (d.success) {
+                    showAlert('✅ 批次删除成功', 'success');
+                    // 重新加载编辑数据
+                    editSession(window.currentEditSession.session_key, { stopPropagation: () => {} });
+                } else {
+                    showAlert('❌ ' + (d.message || '删除失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('删除批次失败:', error);
+                showAlert('❌ 删除失败，请稍后重试', 'danger');
+            }
+        }
+        
+        function removeBatchRow(button) {
+            const row = button.closest('.batch-row');
+            if (document.querySelectorAll('#addProductBatchesContainer .batch-row').length > 1) {
+                row.remove();
+            } else {
+                showAlert('至少需要保留一个批次', 'warning');
+            }
+        }
+        
+        function showAddProductModal() {
+            const modal = new bootstrap.Modal(document.getElementById('addProductModal'));
+            modal.show();
+            
+            // 重置表单
+            document.getElementById('addProductSku').value = '';
+            document.getElementById('addProductBatchesContainer').innerHTML = `
+                <div class="batch-row mb-2">
+                    <input type="date" class="form-control form-control-sm mb-1" id="addProductExpiry1" required>
+                    <input type="number" class="form-control form-control-sm quantity-input" id="addProductQuantity1" placeholder="数量" min="1" required>
+                    <button type="button" class="btn btn-outline-danger btn-sm mt-1 remove-batch-btn" onclick="removeBatchRow(this)">
+                        - 批次
+                    </button>
+                </div>
+            `;
+        }
+        
+        async function confirmAddProduct() {
+            const sku = document.getElementById('addProductSku').value.trim();
+            const batchesContainer = document.getElementById('addProductBatchesContainer');
+            const batches = [];
+            
+            const batchRows = batchesContainer.querySelectorAll('.batch-row');
+            batchRows.forEach(row => {
+                const expiryDate = row.querySelector('input[type="date"]').value;
+                const quantity = parseInt(row.querySelector('.quantity-input').value);
+                
+                if (expiryDate && quantity > 0) {
+                    batches.push({ expiry_date: expiryDate, quantity: quantity });
+                }
+            });
+            
+            if (!sku || batches.length === 0) {
+                showAlert('❌ 请填写完整的商品信息和至少一个批次', 'danger');
+                return;
+            }
+            
+            try {
+                const res = await fetch('index.php?api=add_to_session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: window.currentEditSession.session_key,
+                        sku: sku,
+                        batches: batches
+                    })
+                });
+                
+                const d = await res.json();
+                
+                if (d.success) {
+                    showAlert('✅ 商品添加成功', 'success');
+                    // 关闭模态框
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('addProductModal'));
+                    if (modal) modal.hide();
+                    
+                    // 重新加载编辑数据
+                    editSession(window.currentEditSession.session_key, { stopPropagation: () => {} });
+                } else {
+                    showAlert('❌ ' + (d.message || '添加失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('添加商品失败:', error);
+                showAlert('❌ 添加商品失败，请稍后重试', 'danger');
+            }
+        }
+        
+        async function saveEditSession() {
+            // 获取所有修改后的行
+            const rows = document.querySelectorAll('#editSessionBody tr.edit-item-row');
+            const updates = [];
+            
+            rows.forEach(row => {
+                const batchId = row.dataset.batchId;
+                const expiryDate = row.querySelector('.expiry-input').value;
+                const quantity = parseInt(row.querySelector('.quantity-input').value);
+                
+                // 获取原始数据
+                const originalItem = window.currentEditSession.items.find(item => item.batch_id == batchId);
+                
+                if (originalItem.expiry_date !== expiryDate || originalItem.quantity !== quantity) {
+                    updates.push({ batch_id: batchId, expiry_date: expiryDate, quantity: quantity });
+                }
+            });
+            
+            if (updates.length === 0) {
+                showAlert('✅ 没有需要保存的修改', 'success');
+                return;
+            }
+            
+            // 保存所有修改
+            let allSuccess = true;
+            let errors = [];
+            
+            for (const update of updates) {
+                try {
+                    const res = await fetch('index.php?api=update_batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(update)
+                    });
+                    
+                    const d = await res.json();
+                    
+                    if (!d.success) {
+                        allSuccess = false;
+                        errors.push(`批次 ${update.batch_id} 保存失败: ${d.message}`);
+                    }
+                } catch (error) {
+                    allSuccess = false;
+                    errors.push(`批次 ${update.batch_id} 保存失败: ${error.message}`);
+                }
+            }
+            
+            if (allSuccess) {
+                showAlert('✅ 所有修改已成功保存', 'success');
+                // 重新加载编辑数据
+                editSession(window.currentEditSession.session_key, { stopPropagation: () => {} });
+            } else {
+                showAlert('❌ 部分修改保存失败，请检查错误信息', 'danger');
+                console.error('保存失败:', errors);
+            }
+        }
+        
         async function deleteInventorySession(sessionId, event) {
             event.stopPropagation(); // 阻止触发卡片点击事件
             
@@ -865,6 +1883,24 @@ if (isset($_GET['api'])) {
                     manualSearch();
                 }
             });
+            
+            // 添加商品到盘点单模态框事件
+            document.getElementById('addProductBatchBtn')?.addEventListener('click', ()=>{
+                const container = document.getElementById('addProductBatchesContainer');
+                const batchCount = container.querySelectorAll('.batch-row').length;
+                const newBatchRow = document.createElement('div');
+                newBatchRow.className = 'batch-row mb-2';
+                newBatchRow.innerHTML = `
+                    <input type="date" class="form-control form-control-sm mb-1" id="addProductExpiry${batchCount+1}" required>
+                    <input type="number" class="form-control form-control-sm quantity-input" id="addProductQuantity${batchCount+1}" placeholder="数量" min="1" required>
+                    <button type="button" class="btn btn-outline-danger btn-sm mt-1 remove-batch-btn" onclick="removeBatchRow(this)">
+                        - 批次
+                    </button>
+                `;
+                container.appendChild(newBatchRow);
+            });
+            
+            document.getElementById('confirmAddProductBtn')?.addEventListener('click', confirmAddProduct);
 
             // 草稿操作按钮
             document.getElementById('saveDraftBtn')?.addEventListener('click', () => {
@@ -1153,8 +2189,11 @@ if (isset($_GET['api'])) {
                         </div>
                         <div class="text-end">
                             <span class="badge bg-primary">${s.item_count} 件</span>
-                            <button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteInventorySession('${s.session_key}', event)" title="删除盘点单">
-                                <i class="bi bi-trash"></i>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="editSession('${s.session_key}', event)" title="编辑盘点单">
+                                <i class="bi bi-pencil"></i> 编辑
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger ms-1" onclick="deleteInventorySession('${s.session_key}', event)" title="删除盘点单">
+                                <i class="bi bi-trash"></i> 删除
                             </button>
                         </div>
                     </div>
@@ -1182,6 +2221,316 @@ if (isset($_GET['api'])) {
                 div.appendChild(card);
             });
         }
+
+        // ========================================
+        // 编辑盘点单功能
+        // ========================================
+
+        /**
+         * 进入编辑模式
+         */
+        async function editSession(sessionId, event) {
+            event.stopPropagation(); // 阻止触发卡片点击事件
+
+            try {
+                const res = await fetch(`index.php?api=get_editable_session&session_id=${sessionId}`);
+                const d = await res.json();
+
+                if (!d.success) {
+                    showAlert('❌ ' + (d.message || '加载失败'), 'danger');
+                    return;
+                }
+
+                // 保存当前编辑的盘点单数据
+                window.currentEditSession = {
+                    session_id: d.data.session_id,
+                    items: d.data.items,
+                    item_count: d.data.item_count
+                };
+
+                // 显示编辑界面
+                showEditInterface(d.data);
+
+            } catch (error) {
+                console.error('加载编辑数据失败:', error);
+                showAlert('❌ 加载失败，请稍后重试', 'danger');
+            }
+        }
+
+        /**
+         * 显示编辑界面
+         */
+        function showEditInterface(data) {
+            // 隐藏其他视图，显示编辑视图
+            document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+            let editView = document.getElementById('editView');
+            if (!editView) {
+                // 如果编辑视图不存在，创建它
+                createEditView();
+                editView = document.getElementById('editView');
+            }
+
+            editView.classList.add('active');
+
+            // 填充数据
+            const tbody = document.getElementById('editTableBody');
+            tbody.innerHTML = '';
+
+            data.items.forEach((item, index) => {
+                const row = document.createElement('tr');
+                row.dataset.batchId = item.batch_id;
+                row.innerHTML = `
+                    <td>
+                        <strong>${item.name || ''}</strong><br>
+                        <small class="text-muted">${item.sku || ''}</small>
+                    </td>
+                    <td>
+                        <input type="date" class="form-control form-control-sm" value="${item.expiry_date || ''}" id="edit-expiry-${index}">
+                    </td>
+                    <td>
+                        <input type="number" class="form-control form-control-sm" value="${item.quantity || 0}" min="1" id="edit-qty-${index}">
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-success" onclick="saveBatchEdit(${item.batch_id}, ${index})">
+                            <i class="bi bi-check"></i>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteBatchItem(${item.batch_id})">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // 更新商品数量显示
+            document.getElementById('editItemCount').innerText = data.item_count;
+            document.getElementById('editSessionId').innerText = data.session_id;
+        }
+
+        /**
+         * 创建编辑视图HTML（首次使用时创建）
+         */
+        function createEditView() {
+            const editHtml = `
+                <div id="editView" class="view-section">
+                    <div class="app-header">
+                        <div class="container">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">
+                                    <i class="bi bi-pencil-square me-2"></i>编辑盘点单
+                                </h5>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="cancelEdit()">
+                                    <i class="bi bi-arrow-left me-1"></i>返回
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="container mt-4">
+                        <div class="custom-card">
+                            <h6 class="mb-3">盘点单信息</h6>
+                            <p class="mb-1">
+                                <strong>单号:</strong> <span id="editSessionId"></span>
+                            </p>
+                            <p class="mb-0">
+                                <strong>商品数量:</strong> <span id="editItemCount">0</span> 件
+                            </p>
+                        </div>
+
+                        <div class="custom-card">
+                            <h6 class="mb-3">商品列表</h6>
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>商品</th>
+                                            <th>有效期</th>
+                                            <th>数量</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="editTableBody"></tbody>
+                                </table>
+                            </div>
+
+                            <div class="mt-3">
+                                <button class="btn btn-success w-100" onclick="showAddProductModal()">
+                                    <i class="bi bi-plus-circle me-1"></i>添加商品
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="custom-card">
+                            <button class="btn btn-primary w-100" onclick="finishEdit()">
+                                <i class="bi bi-check-circle me-1"></i>完成编辑
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 插入到主内容区域
+            const mainContent = document.querySelector('body');
+            if (mainContent) {
+                const editDiv = document.createElement('div');
+                editDiv.innerHTML = editHtml;
+                mainContent.appendChild(editDiv.firstElementChild);
+            }
+        }
+
+        /**
+         * 保存批次编辑
+         */
+        async function saveBatchEdit(batchId, index) {
+            const expiryDate = document.getElementById(`edit-expiry-${index}`).value;
+            const quantity = parseInt(document.getElementById(`edit-qty-${index}`).value);
+
+            if (!expiryDate) {
+                showAlert('❌ 请选择有效期', 'danger');
+                return;
+            }
+
+            if (quantity <= 0 || !Number.isInteger(quantity)) {
+                showAlert('❌ 数量必须大于0的整数', 'danger');
+                return;
+            }
+
+            try {
+                const res = await fetch('index.php?api=update_batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        batch_id: batchId,
+                        expiry_date: expiryDate,
+                        quantity: quantity
+                    })
+                });
+
+                const d = await res.json();
+
+                if (d.success) {
+                    showAlert('✅ 保存成功', 'success');
+                    // 重新加载当前编辑界面
+                    const sessionId = window.currentEditSession.session_id;
+                    editSession(sessionId, { stopPropagation: () => {} });
+                } else {
+                    showAlert('❌ ' + (d.message || '保存失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('保存失败:', error);
+                showAlert('❌ 保存失败，请稍后重试', 'danger');
+            }
+        }
+
+        /**
+         * 删除批次
+         */
+        async function deleteBatchItem(batchId) {
+            if (!confirm('确定要删除这个商品吗？')) {
+                return;
+            }
+
+            try {
+                const res = await fetch('index.php?api=delete_batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ batch_id: batchId })
+                });
+
+                const d = await res.json();
+
+                if (d.success) {
+                    showAlert('✅ 删除成功', 'success');
+                    // 重新加载当前编辑界面
+                    const sessionId = window.currentEditSession.session_id;
+                    editSession(sessionId, { stopPropagation: () => {} });
+                } else {
+                    showAlert('❌ ' + (d.message || '删除失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('删除失败:', error);
+                showAlert('❌ 删除失败，请稍后重试', 'danger');
+            }
+        }
+
+        /**
+         * 显示添加商品模态框
+         */
+        function showAddProductModal() {
+            // 复用现有的扫描界面
+            const scanOverlay = document.getElementById('scanOverlay');
+            if (scanOverlay) {
+                // 设置一个标志，表示这是在编辑模式下添加商品
+                window.isEditingAddProduct = true;
+                scanOverlay.style.display = 'flex';
+                // 启动扫描
+                if(typeof startScan === 'function') {
+                    startScan();
+                }
+            } else {
+                showAlert('❌ 扫描功能不可用', 'danger');
+            }
+        }
+
+        /**
+         * 取消编辑，返回往期盘点列表
+         */
+        function cancelEdit() {
+            document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+            const portalView = document.getElementById('portalView');
+            if (portalView) {
+                portalView.classList.add('active');
+            }
+            loadPast(); // 重新加载列表
+        }
+
+        /**
+         * 完成编辑
+         */
+        function finishEdit() {
+            showAlert('✅ 编辑完成！', 'success');
+            cancelEdit();
+        }
+
+        /**
+         * 在编辑模式下，将扫描的商品添加到盘点单
+         */
+        async function addProductToSession(sku, expiryDate, quantity) {
+            if (!window.currentEditSession) {
+                showAlert('❌ 编辑会话丢失，请重新进入编辑模式', 'danger');
+                return;
+            }
+
+            try {
+                const res = await fetch('index.php?api=add_to_session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: window.currentEditSession.session_id,
+                        sku: sku,
+                        batches: [{
+                            expiry_date: expiryDate,
+                            quantity: quantity
+                        }]
+                    })
+                });
+
+                const d = await res.json();
+
+                if (d.success) {
+                    showAlert('✅ 商品添加成功', 'success');
+                    // 重新加载编辑界面
+                    const sessionId = window.currentEditSession.session_id;
+                    editSession(sessionId, { stopPropagation: () => {} });
+                } else {
+                    showAlert('❌ ' + (d.message || '添加失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('添加商品失败:', error);
+                showAlert('❌ 添加失败，请稍后重试', 'danger');
+            }
+        }
+
         async function refreshHealth() {
             const res = await fetch('api.php?endpoint=summary');
             const d = await res.json();
