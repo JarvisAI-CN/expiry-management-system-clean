@@ -39,7 +39,7 @@ if ($checks['db_php_exists']) {
             $checks['active_email_count'] = (int)$row['cnt'];
             
             // 获取邮箱账户列表
-            $stmt = $conn->prepare("SELECT email, is_active, created_at FROM email_accounts");
+            $stmt = $conn->prepare("SELECT email_address, is_active, created_at FROM email_accounts");
             $stmt->execute();
             $result = $stmt->get_result();
             $checks['email_accounts'] = [];
