@@ -248,25 +248,39 @@ if (isset($_GET['api'])) {
         }
         
         if (empty($to)) {
-            echo json_encode(['success'=>false, 'message'=>'未设置默认收件邮箱，请在后台"AI配置"页面设置']);
+            echo json_encode(['success'=>false, 'message'=>'未设置默认收件邮箱，请在后台"AI配置"页面的"盘点单邮件设置"中配置']);
             exit;
         }
         
         // 引入邮件发送功能
-        if (file_exists(__DIR__ . '/email_functions.php')) {
-            require_once __DIR__ . '/email_functions.php';
-            
-            // 使用邮件发送函数
-            $result = sendSmtpEmail($to, $subject, $body);
-            
-            if ($result['success']) {
-                echo json_encode(['success'=>true, 'message'=>'邮件发送成功']);
-            } else {
-                echo json_encode(['success'=>false, 'message'=>$result['message'] ?? '发送失败']);
-            }
+        if (!file_exists(__DIR__ . '/email_functions.php')) {
+            echo json_encode(['success'=>false, 'message'=>'邮件功能文件缺失（email_functions.php），请先运行升级脚本']);
+            exit;
+        }
+        
+        require_once __DIR__ . '/email_functions.php';
+        
+        // 检查是否有可用的邮箱账户
+        $checkStmt = $conn->prepare("SELECT COUNT(*) as cnt FROM email_accounts WHERE is_active = 1");
+        $checkStmt->execute();
+        $checkResult = $checkStmt->get_result();
+        $emailCount = 0;
+        if ($row = $checkResult->fetch_assoc()) {
+            $emailCount = $row['cnt'];
+        }
+        
+        if ($emailCount === 0) {
+            echo json_encode(['success'=>false, 'message'=>'没有可用的邮箱账户，请在后台"邮箱配置"中添加QQ邮箱账户']);
+            exit;
+        }
+        
+        // 使用邮件发送函数
+        $result = sendSmtpEmail($to, $subject, $body);
+        
+        if ($result['success']) {
+            echo json_encode(['success'=>true, 'message'=>'邮件发送成功']);
         } else {
-            // 如果没有邮件功能，返回提示
-            echo json_encode(['success'=>false, 'message'=>'邮件功能尚未配置，请联系管理员']);
+            echo json_encode(['success'=>false, 'message'=>$result['message'] ?? '发送失败']);
         }
         exit;
     }
