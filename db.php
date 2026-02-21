@@ -16,6 +16,24 @@ if (!file_exists(__DIR__ . '/config.php')) {
     require_once __DIR__ . '/config.php';
 }
 
+// 检查是否需要升级
+if (file_exists(__DIR__ . '/config.php') && basename($_SERVER['PHP_SELF']) !== 'install.php' && basename($_SERVER['PHP_SELF']) !== 'upgrade_to_v2.14.php') {
+    require_once __DIR__ . '/config.php';
+    $conn = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    if ($conn && !$conn->connect_error) {
+        // 检查是否缺少email_accounts表（表示需要升级到v2.14）
+        $checkTable = $conn->query("SHOW TABLES LIKE 'email_accounts'");
+        if ($checkTable->num_rows === 0) {
+            // 需要升级
+            if (file_exists(__DIR__ . '/upgrade_to_v2.14.php')) {
+                header("Location: upgrade_to_v2.14.php");
+                exit;
+            }
+        }
+        $conn->close();
+    }
+}
+
 // 错误报告设置
 error_reporting(E_ALL);
 ini_set('display_errors', 1);

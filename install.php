@@ -17,6 +17,28 @@ if (file_exists($lockFile)) {
     die("系统已安装。如需重新安装，请手动删除 install.lock 文件。");
 }
 
+// 如果配置文件存在但缺少email_accounts表，提示升级
+if (file_exists($configFile)) {
+    require_once $configFile;
+    $conn = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    if ($conn && !$conn->connect_error) {
+        $checkTable = $conn->query("SHOW TABLES LIKE 'email_accounts'");
+        if ($checkTable->num_rows === 0) {
+            // 需要升级
+            if (file_exists(__DIR__ . '/upgrade_to_v2.14.php')) {
+                echo "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>需要升级</title></head><body style='font-family:sans-serif;text-align:center;padding:50px'>";
+                echo "<h1>🚀 系统需要升级</h1>";
+                echo "<p>检测到新版本可用，系统需要升级数据库。</p>";
+                echo "<p><a href='upgrade_to_v2.14.php' style='background:#007AFF;color:white;padding:12px 24px;text-decoration:none;border-radius:8px;font-size:16px'>立即升级</a></p>";
+                echo "<p style='color:#666;font-size:14px'>升级过程大约需要10-30秒，请耐心等待</p>";
+                echo "</body></html>";
+                exit;
+            }
+        }
+        $conn->close();
+    }
+}
+
 $error = '';
 $success = false;
 
