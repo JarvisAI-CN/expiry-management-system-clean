@@ -170,18 +170,23 @@ if (isset($_GET['api'])) {
         $data = json_decode(file_get_contents('php://input'), true);
         $sid = $data['session_id'];
         
-        // 使用prepared statement
+        // 使用prepared statement检查批次记录
         $stmt = $conn->prepare("SELECT COUNT(*) as count FROM batches WHERE session_id = ?");
         $stmt->bind_param("s", $sid);
         $stmt->execute();
         $res = $stmt->get_result();
         $count = $res->fetch_assoc()['count'];
         
-        $stmt = $conn->prepare("INSERT INTO inventory_sessions (session_key, user_id, item_count) VALUES (?, ?, ?)");
-        $stmt->bind_param("sii", $sid, $_SESSION['user_id'], $count);
-        $stmt->execute();
-        
-        echo json_encode(['success'=>true]); exit;
+        if ($count > 0) {
+            // 插入盘点会话记录
+            $stmt = $conn->prepare("INSERT INTO inventory_sessions (session_key, user_id, item_count) VALUES (?, ?, ?)");
+            $stmt->bind_param("sii", $sid, $_SESSION['user_id'], $count);
+            $stmt->execute();
+            echo json_encode(['success'=>true]); 
+        } else {
+            echo json_encode(['success'=>false, 'message'=>'没有找到任何盘点记录']);
+        }
+        exit;
     }
     if ($action === 'get_past_sessions') {
         $res = $conn->query("SELECT * FROM inventory_sessions ORDER BY created_at DESC LIMIT 50");
@@ -189,16 +194,37 @@ if (isset($_GET['api'])) {
         echo json_encode(['success'=>true, 'data'=>$list]); exit;
     }
     if ($action === 'get_session_details') {
-        $sid = $_GET['session_id'];
+        $sid = $_GET['session_id'] ?? '';
+        
+        if (empty($sid)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少session_id参数']);
+            exit;
+        }
+        
         // ⚠️ 安全修复：使用prepared statement
         $stmt = $conn->prepare("SELECT p.sku, p.name, b.expiry_date, b.quantity, p.removal_buffer 
                                  FROM batches b 
                                  JOIN products p ON b.product_id = p.id 
                                  WHERE b.session_id = ? 
                                  ORDER BY DATE_SUB(b.expiry_date, INTERVAL p.removal_buffer DAY) ASC");
-        $stmt->bind_param("s", $sid); $stmt->execute();
-        $res = $stmt->get_result(); $list = []; while($r = $res->fetch_assoc()) $list[] = $r;
-        echo json_encode(['success'=>true, 'data'=>$list]); exit;
+        $stmt->bind_param("s", $sid); 
+        $stmt->execute();
+        $res = $stmt->get_result(); 
+        $list = []; 
+        while($r = $res->fetch_assoc()) {
+            $list[] = $r;
+        }
+        
+        // 添加调试信息
+        echo json_encode([
+            'success'=>true, 
+            'data'=>$list,
+            'debug'=>[
+                'session_id'=>$sid,
+                'count'=>count($list)
+            ]
+        ]); 
+        exit;
     }
 }
 ?>
