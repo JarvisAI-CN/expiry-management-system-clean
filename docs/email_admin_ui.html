@@ -1,0 +1,903 @@
+<!--
+========================================
+保质期管理系统 - 邮箱管理页面
+设计文件: email_admin_ui.html
+用于集成到 admin.php
+========================================
+-->
+
+<!-- 邮箱管理页面模板 -->
+<div id="email-management-page" class="page-content" style="display: none;">
+    <div class="page-header">
+        <h2>📧 邮箱账户管理</h2>
+        <p>配置多个QQ邮箱账户，系统将智能轮换发送预警邮件</p>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-label">总账户数</div>
+            <div class="stat-value" id="email-total-count">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">启用账户</div>
+            <div class="stat-value success" id="email-active-count">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">累计发送</div>
+            <div class="stat-value" id="email-total-sent">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">最近发送</div>
+            <div class="stat-value small" id="email-last-sent">-</div>
+        </div>
+    </div>
+
+    <!-- 操作栏 -->
+    <div class="actions-bar">
+        <button class="btn btn-primary" onclick="openAddEmailModal()">
+            <span>+ 添加邮箱</span>
+        </button>
+        <button class="btn btn-secondary" onclick="refreshEmailList()">
+            <span>🔄 刷新</span>
+        </button>
+    </div>
+
+    <!-- 账户列表表格 -->
+    <div class="table-container">
+        <table class="data-table" id="email-accounts-table">
+            <thead>
+                <tr>
+                    <th width="15%">QQ号</th>
+                    <th width="25%">邮箱地址</th>
+                    <th width="10%">状态</th>
+                    <th width="10%">优先级</th>
+                    <th width="10%">发送次数</th>
+                    <th width="15%">最后发送</th>
+                    <th width="15%">操作</th>
+                </tr>
+            </thead>
+            <tbody id="email-accounts-tbody">
+                <!-- 动态加载 -->
+                <tr>
+                    <td colspan="7" class="text-center">加载中...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 发送日志区域 -->
+    <div class="logs-section" style="margin-top: 30px;">
+        <h3>📋 最近发送日志</h3>
+        <div class="table-container">
+            <table class="data-table" id="email-logs-table">
+                <thead>
+                    <tr>
+                        <th width="10%">状态</th>
+                        <th width="20%">发件账户</th>
+                        <th width="20%">收件人</th>
+                        <th width="25%">主题</th>
+                        <th width="15%">发送时间</th>
+                        <th width="10%">详情</th>
+                    </tr>
+                </thead>
+                <tbody id="email-logs-tbody">
+                    <tr>
+                        <td colspan="6" class="text-center">加载中...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑邮箱模态框 -->
+<div id="email-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3 id="email-modal-title">添加邮箱账户</h3>
+            <button class="modal-close" onclick="closeEmailModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="email-form" onsubmit="saveEmailAccount(event)">
+                <input type="hidden" id="email-id" name="id" value="">
+                
+                <div class="form-group">
+                    <label for="qq-number">QQ号</label>
+                    <input type="text" id="qq-number" name="qq_number" 
+                           placeholder="请输入QQ号（5-12位数字）" 
+                           pattern="\d{5,12}" required>
+                    <small class="form-text">系统将自动组装为: xxx@qq.com</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="auth-code">邮箱授权码</label>
+                    <input type="password" id="auth-code" name="auth_code" 
+                           placeholder="请输入QQ邮箱授权码（16位）" 
+                           minlength="16" required>
+                    <small class="form-text">
+                        <a href="https://service.mail.qq.com/cgi-bin/help?subtype=1&id=28&no=1001256" 
+                           target="_blank">如何获取授权码？</a>
+                    </small>
+                </div>
+
+                <div class="form-group">
+                    <label for="priority">优先级</label>
+                    <input type="number" id="priority" name="priority" 
+                           value="0" min="0" max="100">
+                    <small class="form-text">数字越大优先级越高（默认0）</small>
+                </div>
+
+                <div class="form-group" id="status-group" style="display: none;">
+                    <label>
+                        <input type="checkbox" id="is-active" name="is_active" checked>
+                        启用此账户
+                    </label>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">保存</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeEmailModal()">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 测试发送模态框 -->
+<div id="test-email-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3>测试发送邮件</h3>
+            <button class="modal-close" onclick="closeTestEmailModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="test-email-form" onsubmit="sendTestEmail(event)">
+                <input type="hidden" id="test-account-id" name="account_id" value="">
+                
+                <div class="form-group">
+                    <label for="test-recipient">测试目标邮箱</label>
+                    <input type="email" id="test-recipient" name="recipient" 
+                           placeholder="请输入接收测试邮件的邮箱地址" required>
+                </div>
+
+                <div class="info-box">
+                    <p><strong>测试邮件内容：</strong></p>
+                    <p>主题：保质期管理系统 - 测试邮件</p>
+                    <p>正文：这是一封测试邮件，用于验证邮箱配置是否正确。</p>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary" id="test-send-btn">
+                        发送测试邮件
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="closeTestEmailModal()">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 确认删除模态框 -->
+<div id="confirm-delete-modal" class="modal" style="display: none;">
+    <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-header">
+            <h3>确认删除</h3>
+            <button class="modal-close" onclick="closeConfirmDeleteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>确定要删除此邮箱账户吗？</p>
+            <p class="warning">删除后无法恢复！</p>
+            <div class="form-actions">
+                <button class="btn btn-danger" id="confirm-delete-btn">删除</button>
+                <button class="btn btn-secondary" onclick="closeConfirmDeleteModal()">取消</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ======================================== -->
+<!-- JavaScript 代码 -->
+<!-- ======================================== -->
+<script>
+// 全局变量
+let emailAccounts = [];
+let deleteAccountId = null;
+
+// ========================================
+// 页面加载完成后执行
+// ========================================
+document.addEventListener('DOMContentLoaded', function() {
+    // 检查URL参数，如果是email页面则显示
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('page') === 'email') {
+        showEmailPage();
+    }
+});
+
+// ========================================
+// 显示邮箱管理页面
+// ========================================
+function showEmailPage() {
+    // 隐藏其他页面内容
+    document.querySelectorAll('.page-content').forEach(el => el.style.display = 'none');
+    
+    // 显示邮箱管理页面
+    const emailPage = document.getElementById('email-management-page');
+    if (!emailPage) {
+        // 如果页面不存在，动态创建
+        // 这里假设页面已在admin.php中预加载
+        console.error('邮箱管理页面未找到');
+        return;
+    }
+    emailPage.style.display = 'block';
+    
+    // 加载数据
+    loadEmailAccounts();
+    loadEmailLogs();
+}
+
+// ========================================
+// 加载邮箱账户列表
+// ========================================
+async function loadEmailAccounts() {
+    try {
+        const response = await fetch('email_api.php?action=list_accounts');
+        const result = await response.json();
+        
+        if (result.success) {
+            emailAccounts = result.data.accounts;
+            renderEmailAccounts(result.data);
+        } else {
+            showToast('加载失败: ' + result.message, 'error');
+        }
+    } catch (error) {
+        console.error('加载邮箱账户失败:', error);
+        showToast('加载失败，请检查网络连接', 'error');
+    }
+}
+
+// ========================================
+// 渲染邮箱账户列表
+// ========================================
+function renderEmailAccounts(data) {
+    // 更新统计
+    document.getElementById('email-total-count').textContent = data.total;
+    document.getElementById('email-active-count').textContent = data.active_count;
+    
+    // 计算总发送次数和最后发送时间
+    let totalSent = 0;
+    let lastSent = '-';
+    data.accounts.forEach(acc => {
+        totalSent += acc.send_count;
+        if (acc.last_sent_at && lastSent === '-') {
+            lastSent = formatDateTime(acc.last_sent_at);
+        }
+    });
+    document.getElementById('email-total-sent').textContent = totalSent;
+    document.getElementById('email-last-sent').textContent = lastSent;
+    
+    // 渲染表格
+    const tbody = document.getElementById('email-accounts-tbody');
+    
+    if (data.accounts.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center">
+                    <div class="empty-state">
+                        <p>暂无邮箱账户</p>
+                        <button class="btn btn-primary" onclick="openAddEmailModal()">+ 添加邮箱</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tbody.innerHTML = data.accounts.map(acc => `
+        <tr>
+            <td>${acc.qq_number}</td>
+            <td>${acc.email_address}</td>
+            <td>
+                <span class="status-badge ${acc.is_active ? 'active' : 'inactive'}">
+                    ${acc.is_active ? '✅ 启用' : '❌ 禁用'}
+                </span>
+            </td>
+            <td>${acc.priority}</td>
+            <td>${acc.send_count}</td>
+            <td>${acc.last_sent_at ? formatDateTime(acc.last_sent_at) : '-'}</td>
+            <td>
+                <button class="btn btn-sm btn-primary" onclick="openTestEmailModal(${acc.id}, '${acc.email_address}')" title="测试发送">
+                    📧
+                </button>
+                <button class="btn btn-sm btn-secondary" onclick="openEditEmailModal(${acc.id})" title="编辑">
+                    ✏️
+                </button>
+                <button class="btn btn-sm ${acc.is_active ? 'btn-warning' : 'btn-success'}" 
+                        onclick="toggleAccountStatus(${acc.id}, ${!acc.is_active})" 
+                        title="${acc.is_active ? '禁用' : '启用'}">
+                    ${acc.is_active ? '⏸️' : '▶️'}
+                </button>
+                <button class="btn btn-sm btn-danger" onclick="openConfirmDeleteModal(${acc.id})" title="删除">
+                    🗑️
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// ========================================
+// 加载邮件日志
+// ========================================
+async function loadEmailLogs() {
+    try {
+        const response = await fetch('email_api.php?action=get_logs&limit=10');
+        const result = await response.json();
+        
+        if (result.success) {
+            renderEmailLogs(result.data.logs);
+        }
+    } catch (error) {
+        console.error('加载邮件日志失败:', error);
+    }
+}
+
+// ========================================
+// 渲染邮件日志
+// ========================================
+function renderEmailLogs(logs) {
+    const tbody = document.getElementById('email-logs-tbody');
+    
+    if (logs.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="text-center">暂无发送记录</td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tbody.innerHTML = logs.map(log => `
+        <tr>
+            <td>
+                <span class="status-badge ${log.status === 'sent' ? 'success' : log.status === 'failed' ? 'error' : 'pending'}">
+                    ${log.status === 'sent' ? '✅ 成功' : log.status === 'failed' ? '❌ 失败' : '⏳ 发送中'}
+                </span>
+            </td>
+            <td>${log.account_email || 'N/A'}</td>
+            <td>${log.recipient}</td>
+            <td>${log.subject}</td>
+            <td>${log.sent_at ? formatDateTime(log.sent_at) : '-'}</td>
+            <td>
+                ${log.error_message ? `<button class="btn btn-sm btn-secondary" onclick="showErrorDetail('${log.error_message}')">详情</button>` : '-'}
+            </td>
+        </tr>
+    `).join('');
+}
+
+// ========================================
+// 打开添加邮箱模态框
+// ========================================
+function openAddEmailModal() {
+    document.getElementById('email-modal-title').textContent = '添加邮箱账户';
+    document.getElementById('email-form').reset();
+    document.getElementById('email-id').value = '';
+    document.getElementById('status-group').style.display = 'none';
+    document.getElementById('email-modal').style.display = 'flex';
+}
+
+// ========================================
+// 打开编辑邮箱模态框
+// ========================================
+function openEditEmailModal(id) {
+    const account = emailAccounts.find(a => a.id === id);
+    if (!account) return;
+    
+    document.getElementById('email-modal-title').textContent = '编辑邮箱账户';
+    document.getElementById('email-id').value = account.id;
+    document.getElementById('qq-number').value = account.qq_number;
+    document.getElementById('qq-number').disabled = true; // QQ号不可修改
+    document.getElementById('auth-code').value = '';
+    document.getElementById('auth-code').placeholder = '留空则不修改授权码';
+    document.getElementById('priority').value = account.priority;
+    document.getElementById('is-active').checked = account.is_active == 1;
+    document.getElementById('status-group').style.display = 'block';
+    document.getElementById('email-modal').style.display = 'flex';
+}
+
+// ========================================
+// 关闭邮箱模态框
+// ========================================
+function closeEmailModal() {
+    document.getElementById('email-modal').style.display = 'none';
+}
+
+// ========================================
+// 保存邮箱账户
+// ========================================
+async function saveEmailAccount(event) {
+    event.preventDefault();
+    
+    const form = event.target;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    // 转换数据类型
+    if (data.id) data.id = parseInt(data.id);
+    if (data.priority) data.priority = parseInt(data.priority);
+    if (data.is_active !== undefined) data.is_active = data.is_active === 'on';
+    
+    const action = data.id ? 'update_account' : 'add_account';
+    
+    try {
+        const response = await fetch(`email_api.php?action=${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(result.message, 'success');
+            closeEmailModal();
+            loadEmailAccounts();
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        console.error('保存失败:', error);
+        showToast('保存失败，请检查网络连接', 'error');
+    }
+}
+
+// ========================================
+// 切换账户状态
+// ========================================
+async function toggleAccountStatus(id, isActive) {
+    try {
+        const response = await fetch('email_api.php?action=update_account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: id,
+                is_active: isActive
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(isActive ? '账户已启用' : '账户已禁用', 'success');
+            loadEmailAccounts();
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        console.error('操作失败:', error);
+        showToast('操作失败', 'error');
+    }
+}
+
+// ========================================
+// 打开测试发送模态框
+// ========================================
+function openTestEmailModal(accountId, email) {
+    document.getElementById('test-account-id').value = accountId;
+    document.getElementById('test-recipient').value = '';
+    document.getElementById('test-email-modal').style.display = 'flex';
+}
+
+// ========================================
+// 关闭测试发送模态框
+// ========================================
+function closeTestEmailModal() {
+    document.getElementById('test-email-modal').style.display = 'none';
+}
+
+// ========================================
+// 发送测试邮件
+// ========================================
+async function sendTestEmail(event) {
+    event.preventDefault();
+    
+    const btn = document.getElementById('test-send-btn');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    
+    const formData = new FormData(event.target);
+    const data = Object.fromEntries(formData.entries());
+    
+    try {
+        const response = await fetch('email_api.php?action=test_send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast('测试邮件发送成功！', 'success');
+            closeTestEmailModal();
+            loadEmailAccounts();
+        } else {
+            showToast('发送失败: ' + (result.error || result.message), 'error');
+        }
+    } catch (error) {
+        console.error('发送失败:', error);
+        showToast('发送失败，请检查网络连接', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '发送测试邮件';
+    }
+}
+
+// ========================================
+// 打开确认删除模态框
+// ========================================
+function openConfirmDeleteModal(id) {
+    deleteAccountId = id;
+    document.getElementById('confirm-delete-modal').style.display = 'flex';
+}
+
+// ========================================
+// 关闭确认删除模态框
+// ========================================
+function closeConfirmDeleteModal() {
+    deleteAccountId = null;
+    document.getElementById('confirm-delete-modal').style.display = 'none';
+}
+
+// ========================================
+// 确认删除账户
+// ========================================
+document.getElementById('confirm-delete-btn').addEventListener('click', async function() {
+    if (!deleteAccountId) return;
+    
+    try {
+        const response = await fetch('email_api.php?action=delete_account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: deleteAccountId })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast('删除成功', 'success');
+            closeConfirmDeleteModal();
+            loadEmailAccounts();
+        } else {
+            showToast(result.message, 'error');
+        }
+    } catch (error) {
+        console.error('删除失败:', error);
+        showToast('删除失败', 'error');
+    }
+});
+
+// ========================================
+// 刷新列表
+// ========================================
+function refreshEmailList() {
+    loadEmailAccounts();
+    loadEmailLogs();
+    showToast('已刷新', 'info');
+}
+
+// ========================================
+// 工具函数
+// ========================================
+function formatDateTime(dateStr) {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diff = (now - date) / 1000; // 秒
+    
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
+    if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
+    
+    return date.toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function showErrorDetail(message) {
+    alert('错误详情:\n\n' + message);
+}
+
+function showToast(message, type = 'info') {
+    // 这里可以集成现有的toast组件
+    alert(message);
+}
+</script>
+
+<!-- ======================================== -->
+<!-- CSS 样式 -->
+<!-- ======================================== -->
+<style>
+/* 邮箱管理页面样式 */
+.stats-row {
+    display: flex;
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.stat-card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 15px;
+    text-align: center;
+}
+
+.stat-label {
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: bold;
+    color: #333;
+}
+
+.stat-value.success {
+    color: #28a745;
+}
+
+.stat-value.small {
+    font-size: 16px;
+}
+
+.actions-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.table-container {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.data-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #333;
+}
+
+.data-table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-badge.active,
+.status-badge.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-badge.inactive,
+.status-badge.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.status-badge.pending {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: #007bff;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #0056b3;
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: #fff;
+}
+
+.btn-secondary:hover {
+    background: #545b62;
+}
+
+.btn-success {
+    background: #28a745;
+    color: #fff;
+}
+
+.btn-warning {
+    background: #ffc107;
+    color: #000;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: #fff;
+}
+
+.btn-sm {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* 模态框样式 */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: #fff;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    text-align: center;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #333;
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="password"],
+.form-group input[type="number"] {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+}
+
+.form-text {
+    display: block;
+    margin-top: 5px;
+    font-size: 12px;
+    color: #666;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.form-actions button {
+    flex: 1;
+}
+
+.info-box {
+    background: #e7f3ff;
+    border: 1px solid #b3d7ff;
+    border-radius: 4px;
+    padding: 12px;
+    margin-bottom: 15px;
+}
+
+.info-box p {
+    margin: 5px 0;
+    font-size: 14px;
+}
+
+.empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: #666;
+}
+
+.warning {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.logs-section {
+    margin-top: 30px;
+}
+
+.logs-section h3 {
+    margin-bottom: 15px;
+}
+</style>

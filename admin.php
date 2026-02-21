@@ -636,6 +636,7 @@ if (isset($_GET['api'])) {
                     <button class="nav-link active text-start" data-bs-toggle="pill" data-bs-target="#tab-products"><i class="bi bi-box me-2"></i>商品管理</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-cats"><i class="bi bi-grid me-2"></i>分类规则</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-sku"><i class="bi bi-upc-scan me-2"></i>SKU维护</button>
+                    <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-email"><i class="bi bi-envelope me-2"></i>邮箱配置</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-users"><i class="bi bi-people me-2"></i>用户管理</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-ai"><i class="bi bi-robot me-2"></i>AI 配置</button>
                     <button class="nav-link text-start" data-bs-toggle="pill" data-bs-target="#tab-system"><i class="bi bi-tools me-2"></i>系统维护</button>
@@ -795,6 +796,67 @@ if (isset($_GET['api'])) {
                         <div class="d-flex justify-content-between mb-4"><h4>AI 接口设置</h4></div>
                         <div class="admin-card p-4 mx-auto" style="max-width: 600px;"><form id="aiForm"><div class="mb-3"><label class="form-label">API URL</label><input type="text" id="ai_url" class="form-control" placeholder="https://api.openai.com/v1"></div><div class="mb-3"><label class="form-label">API Key</label><input type="password" id="ai_key" class="form-control"></div><div class="mb-3"><label class="form-label">Model</label><input type="text" id="ai_model" class="form-control" placeholder="gpt-4o"></div><div class="d-flex gap-2"><button class="btn btn-primary flex-grow-1">保存设置</button><button type="button" id="testAi" class="btn btn-outline-info" style="min-width: 150px;">测试连接</button></div></form></div>
                     </div>
+                    <div class="tab-pane fade" id="tab-email">
+                        <div class="d-flex justify-content-between mb-4">
+                            <h4>📧 邮箱账户配置</h4>
+                            <button class="btn btn-primary" onclick="showAddEmailModal()">
+                                <i class="bi bi-plus-circle me-2"></i>添加邮箱
+                            </button>
+                        </div>
+
+                        <!-- 邮箱列表 -->
+                        <div class="admin-card p-4">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th>QQ号</th>
+                                            <th>邮箱地址</th>
+                                            <th>状态</th>
+                                            <th>优先级</th>
+                                            <th>发送次数</th>
+                                            <th>最后发送</th>
+                                            <th>最后状态</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="emailListBody">
+                                        <tr>
+                                            <td colspan="8" class="text-center text-muted">加载中...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- 统计卡片 -->
+                        <div class="row mt-4">
+                            <div class="col-md-3">
+                                <div class="admin-card p-3 text-center">
+                                    <h6 class="text-muted mb-2">总账户数</h6>
+                                    <h3 id="totalAccounts">0</h3>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="admin-card p-3 text-center">
+                                    <h6 class="text-muted mb-2">启用账户</h6>
+                                    <h3 id="activeAccounts" class="text-success">0</h3>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="admin-card p-3 text-center">
+                                    <h6 class="text-muted mb-2">总发送数</h6>
+                                    <h3 id="totalSent">0</h3>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="admin-card p-3 text-center">
+                                    <h6 class="text-muted mb-2">系统状态</h6>
+                                    <h3 id="emailSystemStatus" class="text-primary">正常</h3>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="tab-pane fade" id="tab-system">
                         <div class="d-flex justify-content-between mb-4"><h4>系统维护</h4></div>
                         <div class="admin-card p-4 text-center">
@@ -810,7 +872,7 @@ if (isset($_GET['api'])) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            loadProducts(); loadCats(); loadUsers(); loadSettings();
+            loadProducts(); loadCats(); loadUsers(); loadSettings(); loadEmailAccounts();
             document.getElementById('catForm').addEventListener('submit', async (e)=>{
                 e.preventDefault(); const rule = JSON.stringify({need_buffer: true, scrap_on_removal: true});
                 await fetch('admin.php?api=save_category', {method:'POST', body:JSON.stringify({name:document.getElementById('catName').value, type:document.getElementById('catType').value, rule})});
@@ -1220,6 +1282,198 @@ if (isset($_GET['api'])) {
                 }
             } catch (e) {
                 console.error('Load upload categories error:', e);
+            }
+        }
+
+        // ========================================
+        // 邮箱管理相关函数
+        // ========================================
+
+        // 加载邮箱列表
+        async function loadEmailAccounts() {
+            try {
+                const res = await fetch('email_api.php?action=list_accounts');
+                const d = await res.json();
+
+                if (d.success) {
+                    const tbody = document.getElementById('emailListBody');
+                    
+                    if (d.data.accounts.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无邮箱账户，点击上方"添加邮箱"按钮添加</td></tr>';
+                        document.getElementById('totalAccounts').textContent = '0';
+                        document.getElementById('activeAccounts').textContent = '0';
+                        document.getElementById('totalSent').textContent = '0';
+                        return;
+                    }
+
+                    tbody.innerHTML = d.data.accounts.map(acc => {
+                        const statusBadge = acc.is_active 
+                            ? '<span class="badge bg-success">启用</span>' 
+                            : '<span class="badge bg-secondary">禁用</span>';
+                        
+                        const lastStatus = acc.last_sent_success === 1 
+                            ? '<span class="badge bg-success">成功</span>' 
+                            : (acc.last_sent_success === 0 ? '<span class="badge bg-danger">失败</span>' : '-');
+
+                        const lastSent = acc.last_sent_at ? new Date(acc.last_sent_at).toLocaleString('zh-CN') : '-';
+
+                        return `<tr>
+                            <td><code>${acc.qq_number}</code></td>
+                            <td>${acc.email_address}</td>
+                            <td>${statusBadge}</td>
+                            <td>${acc.priority}</td>
+                            <td>${acc.send_count}</td>
+                            <td><small>${lastSent}</small></td>
+                            <td>${lastStatus}</td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="testEmail(${acc.id})" title="测试发送">
+                                    <i class="bi bi-send"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-${acc.is_active ? 'warning' : 'success'}" onclick="toggleEmail(${acc.id}, ${acc.is_active ? 0 : 1})" title="${acc.is_active ? '禁用' : '启用'}">
+                                    <i class="bi bi-${acc.is_active ? 'dash' : 'check2'}"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="deleteEmail(${acc.id})" title="删除">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </td>
+                        </tr>`;
+                    }).join('');
+
+                    // 更新统计
+                    document.getElementById('totalAccounts').textContent = d.data.total;
+                    document.getElementById('activeAccounts').textContent = d.data.active_count;
+                    
+                    const totalSent = d.data.accounts.reduce((sum, acc) => sum + acc.send_count, 0);
+                    document.getElementById('totalSent').textContent = totalSent;
+                    
+                    const statusDiv = document.getElementById('emailSystemStatus');
+                    if (d.data.active_count === 0) {
+                        statusDiv.textContent = '无可用账户';
+                        statusDiv.className = 'text-danger';
+                    } else {
+                        statusDiv.textContent = '正常';
+                        statusDiv.className = 'text-primary';
+                    }
+                } else {
+                    alert('加载邮箱列表失败: ' + d.message);
+                }
+            } catch (e) {
+                console.error('Load email accounts error:', e);
+                document.getElementById('emailListBody').innerHTML = '<tr><td colspan="8" class="text-center text-danger">加载失败，请刷新页面重试</td></tr>';
+            }
+        }
+
+        // 显示添加邮箱对话框
+        function showAddEmailModal() {
+            const qqNumber = prompt('请输入QQ号:');
+            if (!qqNumber) return;
+
+            const authCode = prompt('请输入QQ邮箱授权码:\n\n获取方式: QQ邮箱 → 设置 → 账户 → SMTP → 授权码');
+            if (!authCode) return;
+
+            const priority = prompt('请输入优先级 (数字越大优先级越高，默认0):', '0');
+
+            addEmailAccount(qqNumber, authCode, parseInt(priority) || 0);
+        }
+
+        // 添加邮箱账户
+        async function addEmailAccount(qqNumber, authCode, priority) {
+            try {
+                const res = await fetch('email_api.php?action=add_account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ qq_number: qqNumber, auth_code: authCode, priority })
+                });
+                const d = await res.json();
+
+                if (d.success) {
+                    alert('✅ ' + d.message);
+                    loadEmailAccounts();
+                } else {
+                    alert('❌ ' + d.message);
+                }
+            } catch (e) {
+                alert('添加失败，请重试');
+            }
+        }
+
+        // 切换邮箱状态
+        async function toggleEmail(id, isActive) {
+            try {
+                const res = await fetch('email_api.php?action=update_account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, is_active: isActive })
+                });
+                const d = await res.json();
+
+                if (d.success) {
+                    loadEmailAccounts();
+                } else {
+                    alert('操作失败: ' + d.message);
+                }
+            } catch (e) {
+                alert('操作失败，请重试');
+            }
+        }
+
+        // 删除邮箱
+        async function deleteEmail(id) {
+            if (!confirm('确定要删除此邮箱账户吗？')) return;
+
+            try {
+                const res = await fetch('email_api.php?action=delete_account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                });
+                const d = await res.json();
+
+                if (d.success) {
+                    alert('✅ ' + d.message);
+                    loadEmailAccounts();
+                } else {
+                    alert('❌ ' + d.message);
+                }
+            } catch (e) {
+                alert('删除失败，请重试');
+            }
+        }
+
+        // 测试发送邮件
+        async function testEmail(accountId) {
+            const recipient = prompt('请输入测试收件人邮箱:');
+            if (!recipient) return;
+
+            if (!recipient.includes('@')) {
+                alert('邮箱格式错误');
+                return;
+            }
+
+            try {
+                const btn = event.target.closest('button');
+                const originalText = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+                const res = await fetch('email_api.php?action=test_send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_id: accountId, recipient })
+                });
+                const d = await res.json();
+
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+
+                if (d.success) {
+                    alert('✅ 测试邮件发送成功！请检查收件箱。');
+                    loadEmailAccounts();
+                } else {
+                    alert('❌ 发送失败: ' + d.message);
+                }
+            } catch (e) {
+                alert('发送失败，请重试');
             }
         }
     </script>
