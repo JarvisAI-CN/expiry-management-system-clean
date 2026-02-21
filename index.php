@@ -228,13 +228,23 @@ if (isset($_GET['api'])) {
     }
     
     if ($action === 'send_inventory_email') {
+        // 添加详细的调试日志
+        error_log('send_inventory_email API called: ' . date('Y-m-d H:i:s'));
+        
         // 获取POST数据
-        $input = json_decode(file_get_contents('php://input'), true);
+        $rawInput = file_get_contents('php://input');
+        error_log('Raw input: ' . $rawInput);
+        
+        $input = json_decode($rawInput, true);
+        error_log('Decoded input: ' . print_r($input, true));
+        
         $subject = $input['subject'] ?? '盘点单汇总';
         $body = $input['body'] ?? '';
         
         if (empty($body)) {
-            echo json_encode(['success'=>false, 'message'=>'缺少必要参数']);
+            $errorMsg = '缺少必要参数';
+            error_log('Error: ' . $errorMsg);
+            echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
         
@@ -247,18 +257,24 @@ if (isset($_GET['api'])) {
             $to = $row['s_value'];
         }
         
+        error_log('Default recipient: ' . $to);
+        
         if (empty($to)) {
-            echo json_encode(['success'=>false, 'message'=>'未设置默认收件邮箱，请在后台"AI配置"页面的"盘点单邮件设置"中配置']);
+            $errorMsg = '未设置默认收件邮箱，请在后台"AI配置"页面的"盘点单邮件设置"中配置';
+            error_log('Error: ' . $errorMsg);
+            echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
         
         // 引入邮件发送功能
         if (!file_exists(__DIR__ . '/email_functions.php')) {
-            echo json_encode(['success'=>false, 'message'=>'邮件功能文件缺失（email_functions.php），请先运行升级脚本']);
+            $errorMsg = '邮件功能文件缺失（email_functions.php），请先运行升级脚本';
+            error_log('Error: ' . $errorMsg);
+            echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
         
-        require_once __DIR__ . '/email_functions.php';
+        require_once __DIR__ . '/smtp_mailer.php';
         
         // 检查是否有可用的邮箱账户
         $checkStmt = $conn->prepare("SELECT COUNT(*) as cnt FROM email_accounts WHERE is_active = 1");
@@ -269,18 +285,29 @@ if (isset($_GET['api'])) {
             $emailCount = $row['cnt'];
         }
         
+        error_log('Active email accounts: ' . $emailCount);
+        
         if ($emailCount === 0) {
-            echo json_encode(['success'=>false, 'message'=>'没有可用的邮箱账户，请在后台"邮箱配置"中添加QQ邮箱账户']);
+            $errorMsg = '没有可用的邮箱账户，请在后台"邮箱配置"中添加QQ邮箱账户';
+            error_log('Error: ' . $errorMsg);
+            echo json_encode(['success'=>false, 'message'=>$errorMsg]);
             exit;
         }
         
         // 使用邮件发送函数
+        error_log('Calling sendSmtpEmail to: ' . $to . ', subject: ' . $subject);
         $result = sendSmtpEmail($to, $subject, $body);
+        error_log('sendSmtpEmail result: ' . print_r($result, true));
         
         if ($result['success']) {
-            echo json_encode(['success'=>true, 'message'=>'邮件发送成功']);
+            $successMsg = '邮件发送成功';
+            error_log('Success: ' . $successMsg);
+            echo json_encode(['success'=>true, 'message'=>$successMsg]);
         } else {
-            echo json_encode(['success'=>false, 'message'=>$result['message'] ?? '发送失败']);
+            $errorMsg = $result['message'] ?? '发送失败';
+            $errorDetails = $result['error'] ?? '';
+            error_log('Error: ' . $errorMsg . ', Details: ' . $errorDetails);
+            echo json_encode(['success'=>false, 'message'=>$errorMsg, 'error'=>$errorDetails]);
         }
         exit;
     }
