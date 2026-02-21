@@ -680,6 +680,13 @@ if (isset($_GET['api'])) {
             });
         });
         async function searchSKU(qrCode) {
+            // 清空搜索框和搜索结果（无论从哪里调用都清空）
+            const searchInput = document.getElementById('manualSearchInput');
+            if (searchInput) searchInput.value = '';
+            
+            const searchResults = document.getElementById('manualSearchResults');
+            if (searchResults) searchResults.innerHTML = '';
+            
             // 从二维码中提取SKU
             let sku = qrCode;
             let expiryDateFromQR = null;
@@ -821,6 +828,11 @@ if (isset($_GET['api'])) {
 
             // 如果用户粘贴了整段二维码（包含#），直接走录入流程
             if (q.includes('#')) {
+                // 清空搜索框和结果
+                const searchInput = document.getElementById('manualSearchInput');
+                if (searchInput) searchInput.value = '';
+                box.innerHTML = '';
+                
                 searchSKU(q);
                 return;
             }
@@ -843,7 +855,18 @@ if (isset($_GET['api'])) {
                 btn.type = 'button';
                 btn.className = 'list-group-item list-group-item-action';
                 btn.innerHTML = `<div class="fw-bold">${item.name || '(未命名)'}</div><div class="small text-muted">${item.sku}</div>`;
-                btn.addEventListener('click', () => searchSKU(item.sku));
+                btn.addEventListener('click', () => {
+                    // 清空搜索框
+                    const searchInput = document.getElementById('manualSearchInput');
+                    if (searchInput) searchInput.value = '';
+                    
+                    // 清空搜索结果
+                    const searchResults = document.getElementById('manualSearchResults');
+                    if (searchResults) searchResults.innerHTML = '';
+                    
+                    // 执行商品搜索
+                    searchSKU(item.sku);
+                });
                 list.appendChild(btn);
             });
             box.appendChild(list);
