@@ -314,7 +314,15 @@ function selectNextAccount($conn) {
  * @return array ['success'=>bool, 'data'=>array, 'message'=>string]
  */
 function sendEmail($conn, $recipient, $subject, $body, $specificAccountId = null) {
-    // 1. 选择发送账户
+    // 1. 验证收件人邮箱格式
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+        return [
+            'success' => false,
+            'message' => '收件人邮箱格式错误'
+        ];
+    }
+    
+    // 2. 选择发送账户
     if ($specificAccountId) {
         $sql = "SELECT * FROM email_accounts WHERE id = ? AND is_active = 1";
         $stmt = $conn->prepare($sql);

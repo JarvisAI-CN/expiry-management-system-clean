@@ -48,7 +48,7 @@ function getDBConnection() {
     if (!defined('DB_HOST')) return false;
 
     try {
-        $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+        $conn = new mysqli(DB_HOST, DB_USER, (DB_PASS === null ? '' : DB_PASS), DB_NAME);
         if ($conn->connect_error) return false;
         $conn->set_charset(DB_CHARSET);
         return $conn;

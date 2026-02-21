@@ -7,7 +7,20 @@
  * ========================================
  */
 
+// 调试模式开关（生产环境应设置为false）
+if (!defined('DEBUG_MODE')) {
+    define('DEBUG_MODE', false);
+}
+
 function debugLog($message, $prefix = "DEBUG") {
+    // 生产环境下只记录错误信息
+    if (!DEBUG_MODE) {
+        if ($prefix === 'ERROR') {
+            error_log($message);
+        }
+        return false;
+    }
+    
     $logPath = dirname(__FILE__) . '/debug_log.txt';
     $timestamp = date('Y-m-d H:i:s');
     $fullMessage = "[$timestamp] [$prefix] $message" . PHP_EOL;
