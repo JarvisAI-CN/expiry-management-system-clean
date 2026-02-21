@@ -226,6 +226,43 @@ if (isset($_GET['api'])) {
         ]); 
         exit;
     }
+    
+    if ($action === 'send_inventory_email') {
+        // 获取POST数据
+        $input = json_decode(file_get_contents('php://input'), true);
+        $to = $input['to'] ?? '';
+        $subject = $input['subject'] ?? '盘点单汇总';
+        $body = $input['body'] ?? '';
+        
+        if (empty($to) || empty($body)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少必要参数']);
+            exit;
+        }
+        
+        // 验证收件人邮箱（必须是固定邮箱）
+        if ($to !== 's81482@starbucks.cn') {
+            echo json_encode(['success'=>false, 'message'=>'只能发送到 s81482@starbucks.cn']);
+            exit;
+        }
+        
+        // 引入邮件发送功能
+        if (file_exists(__DIR__ . '/email_functions.php')) {
+            require_once __DIR__ . '/email_functions.php';
+            
+            // 使用邮件发送函数
+            $result = sendSmtpEmail($to, $subject, $body);
+            
+            if ($result['success']) {
+                echo json_encode(['success'=>true, 'message'=>'邮件发送成功']);
+            } else {
+                echo json_encode(['success'=>false, 'message'=>$result['message'] ?? '发送失败']);
+            }
+        } else {
+            // 如果没有邮件功能，返回提示
+            echo json_encode(['success'=>false, 'message'=>'邮件功能尚未配置，请联系管理员']);
+        }
+        exit;
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -517,12 +554,18 @@ if (isset($_GET['api'])) {
                         <tbody id="inventoryDetailBody"></tbody>
                     </table>
                 </div>
+                <div class="modal-footer border-top-0 pt-0">
+                    <button class="btn btn-primary btn-sm" id="sendEmailBtn" onclick="sendInventoryEmail()">
+                        <i class="bi bi-envelope me-1"></i>发送到邮箱
+                    </button>
+                </div>
             </div>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let html5QrCode = null, currentSessionId = 'S'+Date.now(), pendingData = [];
+        let currentInventoryData = null; // 保存当前盘点单数据
         
         // 本地存储相关函数
         const STORAGE_KEY = 'inventory_draft';
@@ -575,6 +618,83 @@ if (isset($_GET['api'])) {
             el.innerText=m; 
             document.body.appendChild(el); 
             setTimeout(()=>el.remove(), 2500); 
+        }
+        
+        async function sendInventoryEmail() {
+            if (!currentInventoryData || !currentInventoryData.items || currentInventoryData.items.length === 0) {
+                showAlert('❌ 没有可发送的数据', 'danger');
+                return;
+            }
+            
+            const btn = document.getElementById('sendEmailBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>发送中...';
+            
+            try {
+                // 生成HTML表格
+                let tableHtml = `
+                    <h3>${currentInventoryData.session_title}</h3>
+                    <p><strong>盘点时间:</strong> ${currentInventoryData.created_at}</p>
+                    <p><strong>商品数量:</strong> ${currentInventoryData.items.length} 件</p>
+                    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+                        <thead>
+                            <tr style="background-color: #f0f0f0;">
+                                <th>商品SKU</th>
+                                <th>商品名称</th>
+                                <th>到期日期</th>
+                                <th>数量</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                currentInventoryData.items.forEach(item => {
+                    tableHtml += `
+                        <tr>
+                            <td>${item.sku || ''}</td>
+                            <td>${item.name || ''}</td>
+                            <td>${item.expiry_date || ''}</td>
+                            <td style="text-align: center;">${item.quantity || 0}</td>
+                        </tr>
+                    `;
+                });
+                
+                tableHtml += `
+                        </tbody>
+                    </table>
+                    <p style="color: #666; font-size: 12px; margin-top: 20px;">
+                        此邮件由保质期管理系统自动发送
+                    </p>
+                `;
+                
+                // 发送邮件
+                const res = await fetch('index.php?api=send_inventory_email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        to: 's81482@starbucks.cn',
+                        subject: `盘点单汇总 - ${currentInventoryData.session_title}`,
+                        body: tableHtml
+                    })
+                });
+                
+                const d = await res.json();
+                
+                if (d.success) {
+                    showAlert('✅ 邮件发送成功！', 'success');
+                    // 关闭弹窗
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('detailModal'));
+                    if (modal) modal.hide();
+                } else {
+                    showAlert('❌ ' + (d.message || '发送失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('发送邮件失败:', error);
+                showAlert('❌ 发送失败，请稍后重试', 'danger');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-envelope me-1"></i>发送到邮箱';
+            }
         }
         document.addEventListener('DOMContentLoaded', () => {
             // 加载草稿数据
@@ -919,6 +1039,15 @@ if (isset($_GET['api'])) {
                 card.addEventListener('click', async() => {
                     const res = await fetch(`index.php?api=get_session_details&session_id=${s.session_key}`);
                     const d = await res.json();
+                    
+                    // 保存当前盘点单数据
+                    currentInventoryData = {
+                        session_id: s.session_key,
+                        session_title: s.session_title || `盘点单 ${s.created_at}`,
+                        items: d.data,
+                        created_at: s.created_at
+                    };
+                    
                     const tbody = document.getElementById('inventoryDetailBody');
                     tbody.innerHTML = '';
                     d.data.forEach(item => {
