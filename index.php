@@ -10,7 +10,7 @@
  */
 
 // 升级配置 - 使用安全的内网源
-define('APP_VERSION', '2.14.0');
+define('APP_VERSION', '2.14.1');
 define('UPDATE_URL', null); // 禁用外部自动升级，改用手动升级
 define('UPDATE_SERVER', 'feishu'); // 从飞书获取升级包
 
@@ -230,18 +230,25 @@ if (isset($_GET['api'])) {
     if ($action === 'send_inventory_email') {
         // 获取POST数据
         $input = json_decode(file_get_contents('php://input'), true);
-        $to = $input['to'] ?? '';
         $subject = $input['subject'] ?? '盘点单汇总';
         $body = $input['body'] ?? '';
         
-        if (empty($to) || empty($body)) {
+        if (empty($body)) {
             echo json_encode(['success'=>false, 'message'=>'缺少必要参数']);
             exit;
         }
         
-        // 验证收件人邮箱（必须是固定邮箱）
-        if ($to !== 's81482@starbucks.cn') {
-            echo json_encode(['success'=>false, 'message'=>'只能发送到 s81482@starbucks.cn']);
+        // 从系统设置获取默认收件邮箱
+        $stmt = $conn->prepare("SELECT s_value FROM settings WHERE s_key = 'default_recipient_email' LIMIT 1");
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $to = '';
+        if ($row = $result->fetch_assoc()) {
+            $to = $row['s_value'];
+        }
+        
+        if (empty($to)) {
+            echo json_encode(['success'=>false, 'message'=>'未设置默认收件邮箱，请在后台"AI配置"页面设置']);
             exit;
         }
         
@@ -261,6 +268,29 @@ if (isset($_GET['api'])) {
             // 如果没有邮件功能，返回提示
             echo json_encode(['success'=>false, 'message'=>'邮件功能尚未配置，请联系管理员']);
         }
+        exit;
+    }
+    
+    if ($action === 'delete_inventory_session') {
+        // 删除盘点单
+        $session_id = $_POST['session_id'] ?? '';
+        
+        if (empty($session_id)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少session_id参数']);
+            exit;
+        }
+        
+        // 删除batches表中的相关记录
+        $stmt = $conn->prepare("DELETE FROM batches WHERE session_id = ?");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        
+        // 删除inventory_sessions表中的记录
+        $stmt = $conn->prepare("DELETE FROM inventory_sessions WHERE session_key = ?");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        
+        echo json_encode(['success'=>true, 'message'=>'盘点单删除成功']);
         exit;
     }
 }
@@ -672,7 +702,6 @@ if (isset($_GET['api'])) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        to: 's81482@starbucks.cn',
                         subject: `盘点单汇总 - ${currentInventoryData.session_title}`,
                         body: tableHtml
                     })
@@ -694,6 +723,34 @@ if (isset($_GET['api'])) {
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '<i class="bi bi-envelope me-1"></i>发送到邮箱';
+            }
+        }
+        
+        async function deleteInventorySession(sessionId, event) {
+            event.stopPropagation(); // 阻止触发卡片点击事件
+            
+            if (!confirm('确定要删除这个盘点单吗？删除后无法恢复！')) {
+                return;
+            }
+            
+            try {
+                const res = await fetch('index.php?api=delete_inventory_session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+                
+                const d = await res.json();
+                
+                if (d.success) {
+                    showAlert('✅ 盘点单删除成功', 'success');
+                    loadPast(); // 重新加载列表
+                } else {
+                    showAlert('❌ ' + (d.message || '删除失败'), 'danger');
+                }
+            } catch (error) {
+                console.error('删除盘点单失败:', error);
+                showAlert('❌ 删除失败，请稍后重试', 'danger');
             }
         }
         document.addEventListener('DOMContentLoaded', () => {
@@ -1032,6 +1089,9 @@ if (isset($_GET['api'])) {
                         </div>
                         <div class="text-end">
                             <span class="badge bg-primary">${s.item_count} 件</span>
+                            <button class="btn btn-sm btn-outline-danger ms-2" onclick="deleteInventorySession('${s.session_key}', event)" title="删除盘点单">
+                                <i class="bi bi-trash"></i>
+                            </button>
                         </div>
                     </div>
                 `;

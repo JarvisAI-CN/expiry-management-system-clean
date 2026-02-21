@@ -302,12 +302,21 @@ if (isset($_GET['api'])) {
 
     // 4. AI & 系统设置
     if ($action === 'get_settings') {
-        echo json_encode(['success'=>true, 'settings'=>['ai_api_url'=>getSetting('ai_api_url'), 'ai_api_key'=>getSetting('ai_api_key'), 'ai_model'=>getSetting('ai_model')]]); exit;
+        echo json_encode(['success'=>true, 'settings'=>['ai_api_url'=>getSetting('ai_api_url'), 'ai_api_key'=>getSetting('ai_api_key'), 'ai_model'=>getSetting('ai_model'), 'default_recipient_email'=>getSetting('default_recipient_email')]]); exit;
     }
     if ($action === 'save_settings') {
         $data = json_decode(file_get_contents('php://input'), true);
         foreach($data as $k=>$v) setSetting($k, $v);
         echo json_encode(['success'=>true]); exit;
+    }
+    if ($action === 'save_email_config') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $email = $data['default_recipient_email'] ?? '';
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            echo json_encode(['success'=>false, 'message'=>'邮箱格式不正确']); exit;
+        }
+        setSetting('default_recipient_email', $email);
+        echo json_encode(['success'=>true, 'message'=>'邮箱设置已保存']); exit;
     }
 
     // 5. SKU维护相关API
@@ -793,8 +802,31 @@ if (isset($_GET['api'])) {
                         </div>
                     </div>
                     <div class="tab-pane fade" id="tab-ai">
-                        <div class="d-flex justify-content-between mb-4"><h4>AI 接口设置</h4></div>
-                        <div class="admin-card p-4 mx-auto" style="max-width: 600px;"><form id="aiForm"><div class="mb-3"><label class="form-label">API URL</label><input type="text" id="ai_url" class="form-control" placeholder="https://api.openai.com/v1"></div><div class="mb-3"><label class="form-label">API Key</label><input type="password" id="ai_key" class="form-control"></div><div class="mb-3"><label class="form-label">Model</label><input type="text" id="ai_model" class="form-control" placeholder="gpt-4o"></div><div class="d-flex gap-2"><button class="btn btn-primary flex-grow-1">保存设置</button><button type="button" id="testAi" class="btn btn-outline-info" style="min-width: 150px;">测试连接</button></div></form></div>
+                        <div class="d-flex justify-content-between mb-4"><h4>系统配置</h4></div>
+                        
+                        <!-- AI 接口设置 -->
+                        <div class="admin-card p-4 mb-4">
+                            <h5 class="mb-3">🤖 AI 接口设置</h5>
+                            <form id="aiForm">
+                                <div class="mb-3"><label class="form-label">API URL</label><input type="text" id="ai_url" class="form-control" placeholder="https://api.openai.com/v1"></div>
+                                <div class="mb-3"><label class="form-label">API Key</label><input type="password" id="ai_key" class="form-control"></div>
+                                <div class="mb-3"><label class="form-label">Model</label><input type="text" id="ai_model" class="form-control" placeholder="gpt-4o"></div>
+                                <div class="d-flex gap-2"><button class="btn btn-primary flex-grow-1">保存设置</button><button type="button" id="testAi" class="btn btn-outline-info" style="min-width: 150px;">测试连接</button></div>
+                            </form>
+                        </div>
+                        
+                        <!-- 默认收件邮箱设置 -->
+                        <div class="admin-card p-4">
+                            <h5 class="mb-3">📧 盘点单邮件设置</h5>
+                            <form id="emailConfigForm">
+                                <div class="mb-3">
+                                    <label class="form-label">默认收件邮箱</label>
+                                    <input type="email" id="default_recipient_email" class="form-control" placeholder="your-email@example.com">
+                                    <small class="form-text text-muted">往期盘点单发送邮件时默认发送到此邮箱</small>
+                                </div>
+                                <button type="submit" class="btn btn-primary">保存邮箱设置</button>
+                            </form>
+                        </div>
                     </div>
                     <div class="tab-pane fade" id="tab-email">
                         <div class="d-flex justify-content-between mb-4">
@@ -891,6 +923,16 @@ if (isset($_GET['api'])) {
                     const d = await res.json(); clearInterval(timer); btn.innerText = originalText; btn.disabled = false; alert(d.message);
                 } catch (e) { clearInterval(timer); btn.innerText = originalText; btn.disabled = false; alert('测试失败'); }
             });
+            document.getElementById('emailConfigForm').addEventListener('submit', async (e)=>{
+                e.preventDefault();
+                await fetch('admin.php?api=save_email_config', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        default_recipient_email: document.getElementById('default_recipient_email').value
+                    })
+                });
+                alert('邮箱设置已保存');
+            });
             document.getElementById('forceUpdateBtn').addEventListener('click', async ()=>{
                 if(!confirm('确定强制升级吗？')) return;
                 const btn = document.getElementById('forceUpdateBtn'); btn.disabled = true; btn.innerText = '升级中...请勿关闭页面';
@@ -917,7 +959,12 @@ if (isset($_GET['api'])) {
         }
         async function loadSettings() {
             const res = await fetch('admin.php?api=get_settings'); const d = await res.json();
-            if(d.success) { document.getElementById('ai_url').value=d.settings.ai_api_url; document.getElementById('ai_key').value=d.settings.ai_api_key; document.getElementById('ai_model').value=d.settings.ai_model; }
+            if(d.success) {
+                document.getElementById('ai_url').value=d.settings.ai_api_url; 
+                document.getElementById('ai_key').value=d.settings.ai_api_key; 
+                document.getElementById('ai_model').value=d.settings.ai_model;
+                document.getElementById('default_recipient_email').value=d.settings.default_recipient_email || '';
+            }
         }
 
         // SKU维护相关函数
