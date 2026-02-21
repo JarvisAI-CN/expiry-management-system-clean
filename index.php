@@ -10,7 +10,7 @@
  */
 
 // 升级配置 - 使用安全的内网源
-define('APP_VERSION', '2.14.1');
+define('APP_VERSION', '2.14.2');
 define('UPDATE_URL', null); // 禁用外部自动升级，改用手动升级
 define('UPDATE_SERVER', 'feishu'); // 从飞书获取升级包
 
@@ -273,24 +273,40 @@ if (isset($_GET['api'])) {
     
     if ($action === 'delete_inventory_session') {
         // 删除盘点单
-        $session_id = $_POST['session_id'] ?? '';
+        $input = json_decode(file_get_contents('php://input'), true);
+        $session_id = $input['session_id'] ?? '';
         
         if (empty($session_id)) {
             echo json_encode(['success'=>false, 'message'=>'缺少session_id参数']);
             exit;
         }
         
+        // 先检查盘点单是否存在
+        $stmt = $conn->prepare("SELECT session_key FROM inventory_sessions WHERE session_key = ?");
+        $stmt->bind_param("s", $session_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if ($result->num_rows === 0) {
+            echo json_encode(['success'=>false, 'message'=>'盘点单不存在']);
+            exit;
+        }
+        
         // 删除batches表中的相关记录
         $stmt = $conn->prepare("DELETE FROM batches WHERE session_id = ?");
         $stmt->bind_param("s", $session_id);
-        $stmt->execute();
+        $batches_deleted = $stmt->execute();
         
         // 删除inventory_sessions表中的记录
         $stmt = $conn->prepare("DELETE FROM inventory_sessions WHERE session_key = ?");
         $stmt->bind_param("s", $session_id);
-        $stmt->execute();
+        $session_deleted = $stmt->execute();
         
-        echo json_encode(['success'=>true, 'message'=>'盘点单删除成功']);
+        if ($batches_deleted && $session_deleted) {
+            echo json_encode(['success'=>true, 'message'=>'盘点单删除成功']);
+        } else {
+            echo json_encode(['success'=>false, 'message'=>'删除失败，请稍后重试']);
+        }
         exit;
     }
 }
@@ -715,7 +731,14 @@ if (isset($_GET['api'])) {
                     const modal = bootstrap.Modal.getInstance(document.getElementById('detailModal'));
                     if (modal) modal.hide();
                 } else {
-                    showAlert('❌ ' + (d.message || '发送失败'), 'danger');
+                    // 显示详细的错误信息
+                    let errorMsg = d.message || '发送失败';
+                    if (errorMsg.includes('未设置默认收件邮箱')) {
+                        errorMsg += '\n\n请在后台管理 → AI配置 → 盘点单邮件设置 中配置收件邮箱';
+                    } else if (errorMsg.includes('邮件功能尚未配置')) {
+                        errorMsg += '\n\n请在后台管理 → 邮箱配置 中添加邮箱账户';
+                    }
+                    showAlert('❌ ' + errorMsg, 'danger');
                 }
             } catch (error) {
                 console.error('发送邮件失败:', error);
