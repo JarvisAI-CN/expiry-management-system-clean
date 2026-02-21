@@ -352,13 +352,16 @@ function sendEmail($conn, $recipient, $subject, $body, $specificAccountId = null
     try {
         // 引入PHPMailer
         if (!class_exists('PHPMailer\PHPMailer\PHPMailer')) {
-            // 尝试从vendor目录加载
-            $vendorPath = __DIR__ . '/vendor/autoload.php';
-            if (file_exists($vendorPath)) {
-                require_once $vendorPath;
-            } else {
+            $phpmailerPath = __DIR__ . '/vendor/phpmailer/phpmailer/src';
+            
+            if (!file_exists($phpmailerPath . '/PHPMailer.php')) {
                 throw new Exception('PHPMailer未安装，请运行: composer require phpmailer/phpmailer');
             }
+            
+            // 直接引入PHPMailer的所有必要文件
+            require_once $phpmailerPath . '/PHPMailer.php';
+            require_once $phpmailerPath . '/SMTP.php';
+            require_once $phpmailerPath . '/Exception.php';
         }
         
         $mail = new PHPMailer\PHPMailer\PHPMailer(true);
