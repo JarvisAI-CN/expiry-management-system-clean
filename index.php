@@ -2662,21 +2662,6 @@ if (isset($_GET['api'])) {
         /**
          * 显示添加商品模态框
          */
-        function showAddProductModal() {
-            // 复用现有的扫描界面
-            const scanOverlay = document.getElementById('scanOverlay');
-            if (scanOverlay) {
-                // 设置一个标志，表示这是在编辑模式下添加商品
-                window.isEditingAddProduct = true;
-                scanOverlay.style.display = 'flex';
-                // 启动扫描
-                if(typeof startScan === 'function') {
-                    startScan();
-                }
-            } else {
-                showAlert('❌ 扫描功能不可用', 'danger');
-            }
-        }
 
         /**
          * 取消编辑，返回往期盘点列表
