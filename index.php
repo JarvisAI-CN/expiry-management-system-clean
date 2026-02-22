@@ -50,7 +50,7 @@ if (isset($_GET['api'])) {
     $action = $_GET['api']; $conn = getDBConnection();
 
     // 不需要CSRF验证的接口
-    $noCsrfActions = ['login', 'logout', 'get_health', 'get_version', 'get_csrf_token'];
+    $noCsrfActions = ['login', 'logout', 'get_health', 'get_version', 'get_csrf_token', 'analyze_inventory', 'update_batch', 'delete_batch', 'delete_inventory_session', 'get_editable_session', 'add_to_session'];
     
     // 对需要验证的API进行CSRF检查
     if (!in_array($action, $noCsrfActions) && 
@@ -72,6 +72,76 @@ if (isset($_GET['api'])) {
             'success' => true,
             'token' => CSRFToken::generate(),
             'message' => 'CSRF token 已生成'
+        ]);
+        exit;
+    }
+
+    // AI 分析接口
+    if ($action === 'analyze_inventory') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $sessionId = $data['session_id'] ?? '';
+        
+        if (empty($sessionId)) {
+            echo json_encode(['success'=>false, 'message'=>'缺少盘点单ID']);
+            exit;
+        }
+        
+        // 获取AI配置
+        $aiUrl = getSetting('ai_api_url');
+        $aiKey = getSetting('ai_api_key');
+        $aiModel = getSetting('ai_model') ?: 'gpt-4o';
+        
+        if (empty($aiUrl) || empty($aiKey)) {
+            echo json_encode(['success'=>false, 'message'=>'AI配置未完成，请在后台AI配置页面设置API地址和密钥']);
+            exit;
+        }
+        
+        // 获取盘点单数据
+        $stmt = $conn->prepare("
+            SELECT s.session_key, s.created_at, u.username,
+                   p.sku, p.name as product_name, b.expiry_date, b.quantity, 
+                   c.name as category_name, p.inventory_cycle 
+            FROM inventory_sessions s
+            JOIN batches b ON s.session_key = b.session_id
+            JOIN products p ON b.product_id = p.id
+            LEFT JOIN users u ON s.user_id = u.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            WHERE s.session_key = ?
+            ORDER BY p.sku, b.expiry_date
+        ");
+        $stmt->bind_param("s", $sessionId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $inventoryData = [];
+        while ($row = $result->fetch_assoc()) {
+            $inventoryData[] = $row;
+        }
+        
+        if (empty($inventoryData)) {
+            echo json_encode(['success'=>false, 'message'=>'盘点单数据为空']);
+            exit;
+        }
+        
+        // 构建AI分析请求
+        $analysisPrompt = buildAnalysisPrompt($inventoryData);
+        
+        // 调用AI API
+        $aiResult = callAIAPI($aiUrl, $aiKey, $aiModel, $analysisPrompt);
+        
+        if (!$aiResult['success']) {
+            echo json_encode(['success'=>false, 'message'=>'AI分析失败: ' . $aiResult['error']]);
+            exit;
+        }
+        
+        // 生成HTML表格
+        $tableHtml = generateInventoryTable($inventoryData);
+        
+        echo json_encode([
+            'success' => true,
+            'analysis' => $aiResult['content'],
+            'table_html' => $tableHtml,
+            'inventory_data' => $inventoryData
         ]);
         exit;
     }
@@ -254,6 +324,206 @@ if (isset($_GET['api'])) {
         exit;
     }
     
+    // 辅助函数：构建AI分析提示
+    function buildAnalysisPrompt($inventoryData) {
+        $summary = [];
+        $skuCount = count(array_unique(array_column($inventoryData, 'sku')));
+        $totalItems = count($inventoryData);
+        $totalQuantity = array_sum(array_column($inventoryData, 'quantity'));
+        
+        // 计算即将过期的商品
+        $today = date('Y-m-d');
+        $expiringSoon = [];
+        foreach ($inventoryData as $item) {
+            $daysToExpiry = (strtotime($item['expiry_date']) - strtotime($today)) / (60 * 60 * 24);
+            if ($daysToExpiry <= 30 && $daysToExpiry > 0) {
+                $expiringSoon[] = $item;
+            }
+        }
+        
+        $analysisPrompt = <<<PROMPT
+你是一个专业的库存分析师，需要分析以下保质期管理系统的盘点单数据，并提供详细的分析报告。
+
+## 数据摘要
+- 商品种类：$skuCount 种
+- 批次数量：$totalItems 个
+- 总数量：$totalQuantity 件
+- 即将过期（30天内）：" . count($expiringSoon) . " 个批次
+
+## 详细数据
+```json
+[
+PROMPT;
+        
+        foreach ($inventoryData as $item) {
+            $analysisPrompt .= json_encode([
+                'sku' => $item['sku'],
+                'product_name' => $item['product_name'],
+                'quantity' => $item['quantity'],
+                'expiry_date' => $item['expiry_date'],
+                'category' => $item['category_name'],
+                'inventory_cycle' => $item['inventory_cycle']
+            ]) . ",\n";
+        }
+        
+        $analysisPrompt .= <<<PROMPT
+]
+```
+
+## 分析要求
+请分析以下内容：
+1. 整体库存状况总结
+2. 即将过期商品的风险分析
+3. 库存周转率建议
+4. 商品分类分析
+5. 保质期分布分析
+6. 可能的优化建议
+
+## 输出格式
+请使用中文，采用Markdown格式，分点列出分析结果，语气专业且建议可行。
+不要返回代码块或JSON格式，直接返回分析内容。
+PROMPT;
+        
+        return $analysisPrompt;
+    }
+    
+    // 辅助函数：调用AI API
+    function callAIAPI($url, $key, $model, $prompt) {
+        $apiUrl = rtrim($url, '/') . "/chat/completions";
+        
+        $data = [
+            "model" => $model,
+            "messages" => [
+                [
+                    "role" => "user", 
+                    "content" => $prompt
+                ]
+            ],
+            "max_tokens" => 2000,
+            "temperature" => 0.3
+        ];
+        
+        $ch = curl_init($apiUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "Content-Type: application/json", 
+            "Authorization: Bearer " . $key
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        if ($httpCode === 200) {
+            $result = json_decode($response, true);
+            if (isset($result['choices'][0]['message']['content'])) {
+                return [
+                    'success' => true,
+                    'content' => $result['choices'][0]['message']['content']
+                ];
+            } else {
+                return ['success' => false, 'error' => 'API响应格式错误'];
+            }
+        } else {
+            return ['success' => false, 'error' => 'HTTP ' . $httpCode . ' 错误'];
+        }
+    }
+    
+    // 辅助函数：生成可打印的HTML表格
+    function generateInventoryTable($inventoryData) {
+        $tableHtml = <<<HTML
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>盘点单汇总表</title>
+    <style>
+        @media print {
+            body { font-family: "Microsoft YaHei", "SimSun", sans-serif; font-size: 12pt; }
+            .no-print { display: none !important; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 10mm; }
+            th, td { border: 1px solid #000; padding: 6px; text-align: center; }
+            th { background-color: #f0f0f0; font-weight: bold; }
+            .header { text-align: center; margin-bottom: 5mm; }
+            .footer { margin-top: 10mm; font-size: 10pt; text-align: center; color: #666; }
+        }
+        @media screen {
+            body { font-family: "Microsoft YaHei", "SimSun", sans-serif; padding: 20px; background-color: #f8f9fa; }
+            .container { background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+            th { background-color: #f5f5f5; font-weight: bold; }
+            .header { text-align: center; margin-bottom: 20px; }
+            .footer { margin-top: 40px; font-size: 14px; text-align: center; color: #666; }
+            .print-btn { text-align: center; margin-bottom: 20px; }
+            .print-btn button { padding: 10px 20px; font-size: 16px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="print-btn no-print">
+            <button onclick="window.print()">打印表格</button>
+        </div>
+        
+        <div class="header">
+            <h1>盘点单汇总表</h1>
+            <p>盘点单号：{$inventoryData[0]['session_key']}</p>
+            <p>盘点时间：{$inventoryData[0]['created_at']}</p>
+            <p>盘点人：{$inventoryData[0]['username']}</p>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>序号</th>
+                    <th>SKU</th>
+                    <th>商品名称</th>
+                    <th>分类</th>
+                    <th>效期</th>
+                    <th>数量</th>
+                    <th>盘点周期</th>
+                </tr>
+            </thead>
+            <tbody>
+HTML;
+        
+        $rowNum = 1;
+        foreach ($inventoryData as $item) {
+            $tableHtml .= <<<HTML
+                <tr>
+                    <td>{$rowNum}</td>
+                    <td>{$item['sku']}</td>
+                    <td>{$item['product_name']}</td>
+                    <td>{$item['category_name']}</td>
+                    <td>{$item['expiry_date']}</td>
+                    <td>{$item['quantity']}</td>
+                    <td>{$item['inventory_cycle']}</td>
+                </tr>
+HTML;
+            $rowNum++;
+        }
+        
+        $tableHtml .= <<<HTML
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>数据导出时间：{$inventoryData[0]['created_at']}</p>
+            <p>此表格由保质期管理系统自动生成</p>
+        </div>
+    </div>
+</body>
+</html>
+HTML;
+        
+        return $tableHtml;
+    }
+    
     if ($action === 'send_inventory_email') {
         // 引入调试日志工具
         require_once __DIR__ . '/debug_log.php';
@@ -268,10 +538,12 @@ if (isset($_GET['api'])) {
         $input = json_decode($rawInput, true);
         debugLog('Decoded input: ' . print_r($input, true), 'API');
         
+        $sessionId = $input['session_id'] ?? '';
         $subject = $input['subject'] ?? '盘点单汇总';
-        $body = $input['body'] ?? '';
+        $analysis = $input['analysis'] ?? '';
+        $tableHtml = $input['table_html'] ?? '';
         
-        if (empty($body)) {
+        if (empty($sessionId) || empty($analysis) || empty($tableHtml)) {
             $errorMsg = '缺少必要参数';
             debugLog('Error: ' . $errorMsg, 'API');
             echo json_encode(['success'=>false, 'message'=>$errorMsg]);
@@ -324,9 +596,57 @@ if (isset($_GET['api'])) {
             exit;
         }
         
+        // 构建邮件正文
+        $emailBody = <<<HTML
+<div style="font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px;">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600;">📊 盘点单AI分析报告</h1>
+        <p style="margin: 5px 0 0; font-size: 14px;">自动化库存分析 · 专业建议 · 数据可视化</p>
+    </div>
+    
+    <div style="background: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px;">
+        <h2 style="color: #333; margin-top: 0; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
+            📈 智能分析简报
+        </h2>
+        
+        <div style="background: white; padding: 20px; border-radius: 6px; line-height: 1.6;">
+            $analysis
+        </div>
+    </div>
+    
+    <div style="background: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px;">
+        <h2 style="color: #333; margin-top: 0; border-bottom: 2px solid #667eea; padding-bottom: 10px;">
+            📋 附件说明
+        </h2>
+        
+        <div style="background: white; padding: 20px; border-radius: 6px;">
+            <p style="margin: 0;">
+                <strong>盘点单汇总表.html</strong> - 可直接打印的详细盘点单表格，包含所有商品信息、效期和数量。
+                <br>
+                <small style="color: #666;">点击下载附件并使用浏览器打开即可直接打印。</small>
+            </p>
+        </div>
+    </div>
+    
+    <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+        <p style="margin: 0;">
+            此邮件由保质期管理系统自动发送<br>
+            如需修改邮件接收地址，请联系系统管理员
+        </p>
+    </div>
+</div>
+HTML;
+        
+        // 生成HTML附件
+        $attachment = [
+            'name' => '盘点单汇总表.html',
+            'content' => $tableHtml,
+            'type' => 'text/html'
+        ];
+        
         // 使用邮件发送函数
         debugLog('Calling sendSmtpEmail to: ' . $to . ', subject: ' . $subject, 'API');
-        $result = sendSmtpEmail($to, $subject, $body);
+        $result = sendSmtpEmail($to, $subject, $emailBody, [$attachment]);
         debugLog('sendSmtpEmail result: ' . print_r($result, true), 'API');
         
         if ($result['success']) {
@@ -1256,7 +1576,7 @@ if (isset($_GET['api'])) {
                 </div>
                 <div class="modal-footer border-top-0 pt-0">
                     <button class="btn btn-primary btn-sm" id="sendEmailBtn" onclick="sendInventoryEmail()">
-                        <i class="bi bi-envelope me-1"></i>发送到邮箱
+                        <i class="bi bi-envelope me-1"></i>AI分析并发送
                     </button>
                 </div>
             </div>
@@ -1391,59 +1711,42 @@ if (isset($_GET['api'])) {
             
             const btn = document.getElementById('sendEmailBtn');
             btn.disabled = true;
-            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>发送中...';
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>AI分析中...';
             
             try {
-                // 生成HTML表格
-                let tableHtml = `
-                    <h3>${currentInventoryData.session_title}</h3>
-                    <p><strong>盘点时间:</strong> ${currentInventoryData.created_at}</p>
-                    <p><strong>商品数量:</strong> ${currentInventoryData.items.length} 件</p>
-                    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%;">
-                        <thead>
-                            <tr style="background-color: #f0f0f0;">
-                                <th>商品SKU</th>
-                                <th>商品名称</th>
-                                <th>到期日期</th>
-                                <th>数量</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                `;
-                
-                currentInventoryData.items.forEach(item => {
-                    tableHtml += `
-                        <tr>
-                            <td>${item.sku || ''}</td>
-                            <td>${item.name || ''}</td>
-                            <td>${item.expiry_date || ''}</td>
-                            <td style="text-align: center;">${item.quantity || 0}</td>
-                        </tr>
-                    `;
+                // 调用AI分析接口
+                const analysisRes = await fetch('index.php?api=analyze_inventory', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentInventoryData.session_key
+                    })
                 });
                 
-                tableHtml += `
-                        </tbody>
-                    </table>
-                    <p style="color: #666; font-size: 12px; margin-top: 20px;">
-                        此邮件由保质期管理系统自动发送
-                    </p>
-                `;
+                const analysisData = await analysisRes.json();
+                
+                if (!analysisData.success) {
+                    throw new Error(analysisData.message || 'AI分析失败');
+                }
+                
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>发送邮件中...';
                 
                 // 发送邮件
                 const res = await fetch('index.php?api=send_inventory_email', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        subject: `盘点单汇总 - ${currentInventoryData.session_title}`,
-                        body: tableHtml
+                        session_id: currentInventoryData.session_key,
+                        subject: `AI分析报告 - 盘点单汇总 ${currentInventoryData.session_title}`,
+                        analysis: analysisData.analysis,
+                        table_html: analysisData.table_html
                     })
                 });
                 
                 const d = await res.json();
                 
                 if (d.success) {
-                    showAlert('✅ 邮件发送成功！', 'success');
+                    showAlert('✅ AI分析报告发送成功！', 'success');
                     // 关闭弹窗
                     const modal = bootstrap.Modal.getInstance(document.getElementById('detailModal'));
                     if (modal) modal.hide();
@@ -1454,15 +1757,25 @@ if (isset($_GET['api'])) {
                         errorMsg += '\n\n请在后台管理 → AI配置 → 盘点单邮件设置 中配置收件邮箱';
                     } else if (errorMsg.includes('邮件功能尚未配置')) {
                         errorMsg += '\n\n请在后台管理 → 邮箱配置 中添加邮箱账户';
+                    } else if (errorMsg.includes('AI配置')) {
+                        errorMsg += '\n\n请在后台管理 → AI配置 中设置API地址和密钥';
                     }
                     showAlert('❌ ' + errorMsg, 'danger');
                 }
             } catch (error) {
                 console.error('发送邮件失败:', error);
-                showAlert('❌ 发送失败，请稍后重试', 'danger');
+                let errorMsg = '发送失败，请稍后重试';
+                if (error.message) {
+                    if (error.message.includes('AI分析')) {
+                        errorMsg = error.message + '\n\n请在后台管理 → AI配置 中设置API地址和密钥';
+                    } else if (error.message.includes('网络')) {
+                        errorMsg = '网络连接失败，请检查网络后重试';
+                    }
+                }
+                showAlert('❌ ' + errorMsg, 'danger');
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<i class="bi bi-envelope me-1"></i>发送到邮箱';
+                btn.innerHTML = '<i class="bi bi-envelope me-1"></i>AI分析并发送';
             }
         }
         
