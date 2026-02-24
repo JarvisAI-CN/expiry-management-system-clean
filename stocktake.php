@@ -9,7 +9,8 @@
 
 session_start();
 
-// 引入必要的类文件
+// 引入必要的类文件和函数库
+require_once 'includes/functions.php';
 require_once 'core/Database.php';
 require_once 'core/AuthService.php';
 
@@ -44,19 +45,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if ($action === 'create') {
             // 创建新的盘点单
-            $name = $_POST['name'] ?? '';
+            $session_code = $_POST['session_code'] ?? '';
             $description = $_POST['description'] ?? '';
+            $currentUser = $authService->getCurrentUser();
             
-            if (empty($name)) {
-                throw new Exception("盘点单名称不能为空");
+            if (empty($session_code)) {
+                // 自动生成盘点编号
+                $session_code = 'STK-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
             }
             
             $stmt = $pdo->prepare("
-                INSERT INTO stocktake_sessions (name, description, created_at, updated_at) 
-                VALUES (?, ?, NOW(), NOW())
+                INSERT INTO stocktake_sessions (session_code, user_id, status, ai_analysis, created_at, updated_at) 
+                VALUES (?, ?, 'draft', NULL, NOW(), NOW())
             ");
             
-            $stmt->execute([$name, $description]);
+            $stmt->execute([$session_code, $currentUser['id']]);
             $sessionId = $pdo->lastInsertId();
             
             $success = "盘点单创建成功！";
@@ -66,20 +69,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'update') {
             // 更新盘点单
             $sessionId = intval($_POST['session_id'] ?? 0);
-            $name = $_POST['name'] ?? '';
-            $description = $_POST['description'] ?? '';
+            $session_code = $_POST['session_code'] ?? '';
             
-            if ($sessionId <= 0 || empty($name)) {
+            if ($sessionId <= 0 || empty($session_code)) {
                 throw new Exception("参数不完整");
             }
             
             $stmt = $pdo->prepare("
                 UPDATE stocktake_sessions 
-                SET name = ?, description = ?, updated_at = NOW()
+                SET session_code = ?, updated_at = NOW()
                 WHERE id = ?
             ");
             
-            $stmt->execute([$name, $description, $sessionId]);
+            $stmt->execute([$session_code, $sessionId]);
             $success = "盘点单更新成功！";
             
         } elseif ($action === 'add_item') {
@@ -250,15 +252,9 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
                             <input type="hidden" name="session_id" value="<?php echo $currentSession['id']; ?>">
                             
                             <div class="mb-3">
-                                <label for="name" class="form-label">盘点单名称</label>
-                                <input type="text" class="form-control" id="name" name="name" 
-                                       value="<?php echo escapeHtml($currentSession['name']); ?>" required>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label for="description" class="form-label">描述</label>
-                                <textarea class="form-control" id="description" name="description" 
-                                          rows="3"><?php echo escapeHtml($currentSession['description']); ?></textarea>
+                                <label for="session_code" class="form-label">盘点编号</label>
+                                <input type="text" class="form-control" id="session_code" name="session_code" 
+                                       value="<?php echo escapeHtml($currentSession['session_code']); ?>" required>
                             </div>
                             
                             <div class="mb-3">
@@ -534,8 +530,7 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
                         <table class="table table-bordered data-table">
                             <thead>
                                 <tr>
-                                    <th>名称</th>
-                                    <th>描述</th>
+                                    <th>盘点编号</th>
                                     <th>项目数量</th>
                                     <th>状态</th>
                                     <th>创建时间</th>
@@ -546,9 +541,8 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
                                 <?php foreach ($sessions as $session): ?>
                                 <tr>
                                     <td>
-                                        <strong><?php echo escapeHtml($session['name']); ?></strong>
+                                        <strong><?php echo escapeHtml($session['session_code']); ?></strong>
                                     </td>
-                                    <td><?php echo escapeHtml($session['description']); ?></td>
                                     <td>
                                         <span class="badge bg-info">
                                             <?php echo $session['item_count']; ?> 条
@@ -595,15 +589,9 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
                 <input type="hidden" name="action" value="create">
                 <div class="modal-body">
                     <div class="mb-3">
-                        <label for="new_name" class="form-label">盘点单名称</label>
-                        <input type="text" class="form-control" id="new_name" name="name" 
-                               placeholder="例如：2026-02-24 效期盘点" required>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label for="new_description" class="form-label">描述</label>
-                        <textarea class="form-control" id="new_description" name="description" 
-                                  rows="3" placeholder="描述本次盘点的目的"></textarea>
+                        <label for="session_code" class="form-label">盘点编号</label>
+                        <input type="text" class="form-control" id="session_code" name="session_code" 
+                               placeholder="例如：STK-20260224-0001" required>
                     </div>
                 </div>
                 <div class="modal-footer">

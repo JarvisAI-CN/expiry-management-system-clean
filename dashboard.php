@@ -46,6 +46,13 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $systemConfigs[$row['config_key']] = $row['config_value'];
 }
 
+// 检查数据库迁移状态
+require_once 'core/MigrationManager.php';
+$migrationManager = new MigrationManager($pdo, __DIR__ . '/migrations');
+$currentVersion = $migrationManager->getCurrentVersion();
+$availableMigrations = $migrationManager->getAvailableMigrations();
+$pendingMigrations = $migrationManager->getPendingMigrations();
+
 // 统计数据
 $stats = [
     'total_products' => 0,
@@ -317,6 +324,63 @@ if (isset($_GET['action']) && $_GET['action'] === 'generate_ai_analysis') {
                                 <p><i class="fas fa-exclamation-triangle"></i> 即将过期</p>
                             </div>
                         </div>
+                    </div>
+                </div>
+                
+                <!-- 数据库迁移状态 -->
+                <div class="card mb-4">
+                    <div class="card-header bg-transparent">
+                        <h5 class="card-title">
+                            <i class="fas fa-database"></i> 数据库迁移状态
+                        </h5>
+                    </div>
+                    
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3 mb-3">
+                                <div class="text-center">
+                                    <h6 class="text-muted">当前版本</h6>
+                                    <h4 class="text-primary"><?php echo $currentVersion; ?></h4>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-3 mb-3">
+                                <div class="text-center">
+                                    <h6 class="text-muted">总迁移数</h6>
+                                    <h4 class="text-success"><?php echo count($availableMigrations); ?></h4>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-3 mb-3">
+                                <div class="text-center">
+                                    <h6 class="text-muted">待执行</h6>
+                                    <h4 class="<?php echo count($pendingMigrations) > 0 ? 'text-warning' : 'text-success'; ?>">
+                                        <?php echo count($pendingMigrations); ?>
+                                    </h4>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-3 mb-3">
+                                <div class="text-center">
+                                    <h6 class="text-muted">迁移状态</h6>
+                                    <h4 class="<?php echo count($pendingMigrations) > 0 ? 'text-warning' : 'text-success'; ?>">
+                                        <?php echo count($pendingMigrations) > 0 ? '需要更新' : '已同步'; ?>
+                                    </h4>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <?php if (count($pendingMigrations) > 0): ?>
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle"></i> 
+                                数据库结构需要更新。系统会在下一次访问时自动应用迁移。
+                            </div>
+                        <?php else: ?>
+                            <div class="alert alert-success">
+                                <i class="fas fa-check-circle"></i> 
+                                数据库结构与代码保持一致。
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
                 

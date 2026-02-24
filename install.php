@@ -137,9 +137,14 @@ if ($step == 3) {
                 $pdo = new PDO($dsn, $config['user'], $config['pass']);
                 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
                 
-                // 导入数据库结构
-                $sql = file_get_contents('schema.sql');
-                $pdo->exec($sql);
+                // 使用迁移管理器初始化数据库结构
+                require_once 'core/MigrationManager.php';
+                $migrationManager = new MigrationManager($pdo, __DIR__ . '/migrations', $config['prefix']);
+                $result = $migrationManager->applyMigrations();
+                
+                if (!$result['success']) {
+                    throw new Exception('数据库初始化失败：' . $result['message']);
+                }
                 
                 // 更新管理员密码
                 $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
