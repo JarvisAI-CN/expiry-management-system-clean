@@ -227,6 +227,75 @@ if (isset($_GET['action']) && $_GET['action'] === 'generate_ai_analysis') {
             font-weight: 700;
             margin-right: 10px;
         }
+        
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            /* 导航栏调整 */
+            .navbar-brand {
+                font-size: 1rem;
+            }
+            
+            .user-info span {
+                display: none;
+            }
+            
+            /* 侧边栏调整 */
+            .col-md-3 {
+                display: none;
+            }
+            
+            .col-md-9 {
+                width: 100%;
+            }
+            
+            /* 统计卡片调整 */
+            .stat-card h3 {
+                font-size: 2rem;
+            }
+            
+            /* 页面标题调整 */
+            .page-title {
+                font-size: 1.3rem;
+            }
+            
+            /* 按钮调整 */
+            .btn {
+                font-size: 14px;
+                padding: 8px 16px;
+            }
+            
+            /* 卡片样式调整 */
+            .card {
+                border-radius: 12px;
+            }
+            
+            /* 数据库迁移状态调整 */
+            .text-center h4 {
+                font-size: 1.5rem;
+            }
+        }
+        
+        /* 平板设备适配 */
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .stat-card h3 {
+                font-size: 2.2rem;
+            }
+            
+            .page-title {
+                font-size: 1.4rem;
+            }
+        }
+        
+        /* 小屏幕平板设备 */
+        @media (min-width: 576px) and (max-width: 768px) {
+            .col-md-3 {
+                display: block;
+            }
+            
+            .col-md-9 {
+                width: 75%;
+            }
+        }
     </style>
 </head>
 <body>

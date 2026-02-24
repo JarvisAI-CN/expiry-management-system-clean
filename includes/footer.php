@@ -33,11 +33,86 @@
         </div>
     </footer>
 
+    <!-- 侧边栏样式 - 移动端 -->
+    <style>
+        .sidebar-overlay {
+            position: fixed;
+            top: 60px;
+            left: 0;
+            width: 100%;
+            height: calc(100vh - 60px);
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 99;
+            display: none;
+        }
+        
+        .sidebar-overlay.active {
+            display: block;
+        }
+        
+        /* 侧边栏切换动画 */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            
+            .sidebar.active {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+        }
+    </style>
+    
     <!-- 通用 JavaScript -->
     <script>
-        // 页面加载完成后的初始化
+        // 侧边栏切换功能
         $(document).ready(function() {
-            // 初始化 DataTables
+            // 侧边栏切换按钮
+            $('#sidebarToggle').on('click', function() {
+                $('#sidebar').toggleClass('active');
+                $('#sidebarOverlay').toggleClass('active');
+                $('body').toggleClass('sidebar-open');
+                
+                // 阻止页面滚动
+                if ($('#sidebar').hasClass('active')) {
+                    $('body').css('overflow', 'hidden');
+                } else {
+                    $('body').css('overflow', 'auto');
+                }
+            });
+            
+            // 侧边栏覆盖层点击
+            $('#sidebarOverlay').on('click', function() {
+                $('#sidebar').removeClass('active');
+                $('#sidebarOverlay').removeClass('active');
+                $('body').removeClass('sidebar-open');
+                $('body').css('overflow', 'auto');
+            });
+            
+            // 侧边栏导航点击（移动端）
+            $('#sidebar .list-group-item').on('click', function() {
+                if ($(window).width() < 768) {
+                    $('#sidebar').removeClass('active');
+                    $('#sidebarOverlay').removeClass('active');
+                    $('body').removeClass('sidebar-open');
+                    $('body').css('overflow', 'auto');
+                }
+            });
+            
+            // 响应式调整
+            $(window).on('resize', function() {
+                if ($(window).width() >= 768) {
+                    $('#sidebar').removeClass('active');
+                    $('#sidebarOverlay').removeClass('active');
+                    $('body').removeClass('sidebar-open');
+                    $('body').css('overflow', 'auto');
+                }
+            });
+            
+            // 初始化 DataTables 响应式设置
             if ($.fn.DataTable) {
                 $('.data-table').DataTable({
                     "language": {
@@ -47,7 +122,8 @@
                     "paging": true,
                     "ordering": true,
                     "info": true,
-                    "searching": true
+                    "searching": true,
+                    "scrollX": true
                 });
             }
 

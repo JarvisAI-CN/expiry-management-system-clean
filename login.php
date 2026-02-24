@@ -68,7 +68,10 @@ if ($authService->isLoggedIn()) {
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>星巴克门店智能效期管理系统 - 登录</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -79,48 +82,59 @@ if ($authService->isLoggedIn()) {
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            padding: 15px;
         }
         
         .login-container {
             background: white;
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            padding: 40px;
+            padding: 30px 20px;
             max-width: 400px;
             width: 100%;
+            margin: 0 auto;
         }
         
         .login-header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
+        }
+        
+        .login-header i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: #667eea;
         }
         
         .login-header h2 {
             color: #333;
             font-weight: 700;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+            font-size: 1.4rem;
         }
         
         .login-header p {
             color: #6c757d;
             margin: 0;
+            font-size: 0.9rem;
         }
         
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 18px;
         }
         
         .form-group label {
             font-weight: 600;
             color: #495057;
             margin-bottom: 8px;
+            font-size: 0.95rem;
         }
         
         .form-control {
             border-radius: 10px;
             border: 1px solid #dee2e6;
-            padding: 12px 20px;
+            padding: 14px 20px;
             font-size: 16px;
         }
         
@@ -144,12 +158,13 @@ if ($authService->isLoggedIn()) {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border: none;
             border-radius: 10px;
-            padding: 12px 20px;
+            padding: 14px 20px;
             font-weight: 600;
             font-size: 16px;
             width: 100%;
             color: white;
             transition: all 0.3s ease;
+            margin-top: 10px;
         }
         
         .btn-login:hover {
@@ -162,18 +177,20 @@ if ($authService->isLoggedIn()) {
         .alert {
             border-radius: 10px;
             margin-bottom: 20px;
+            font-size: 0.9rem;
+            padding: 12px 16px;
         }
         
         .form-check-label {
             color: #6c757d;
-            font-size: 14px;
+            font-size: 0.9rem;
         }
         
         .login-footer {
             text-align: center;
-            margin-top: 30px;
+            margin-top: 25px;
             color: #6c757d;
-            font-size: 14px;
+            font-size: 0.85rem;
         }
         
         .login-footer a {
@@ -183,6 +200,49 @@ if ($authService->isLoggedIn()) {
         
         .login-footer a:hover {
             text-decoration: underline;
+        }
+        
+        /* 移动端优化 */
+        @media (max-width: 480px) {
+            .login-container {
+                padding: 25px 15px;
+                border-radius: 15px;
+            }
+            
+            .login-header h2 {
+                font-size: 1.3rem;
+            }
+            
+            .login-header i {
+                font-size: 2.5rem;
+                margin-bottom: 12px;
+            }
+            
+            .form-control {
+                font-size: 16px;
+                padding: 12px 16px;
+            }
+            
+            .btn-login {
+                font-size: 16px;
+                padding: 12px 20px;
+            }
+            
+            .login-footer {
+                font-size: 0.8rem;
+            }
+        }
+        
+        /* 平板设备优化 */
+        @media (min-width: 768px) {
+            .login-container {
+                padding: 40px 30px;
+                border-radius: 20px;
+            }
+            
+            .login-header h2 {
+                font-size: 1.5rem;
+            }
         }
     </style>
 </head>

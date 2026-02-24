@@ -8,8 +8,8 @@ LOCAL_DIR=$(pwd)
 
 echo "开始上传所有修改后的文件..."
 
-# 创建目录（如果不存在）
-ftp -n <<EOF
+# 确保使用主动模式连接 FTP 服务器
+ftp -A -n <<EOF
 open $FTP_SERVER
 user $FTP_USER $FTP_PASS
 mkdir core
@@ -20,7 +20,7 @@ quit
 EOF
 
 # 上传核心文件
-ftp -n <<EOF
+ftp -A -n <<EOF
 open $FTP_SERVER
 user $FTP_USER $FTP_PASS
 binary
@@ -30,7 +30,7 @@ chmod 644 MigrationManager.php
 quit
 EOF
 
-ftp -n <<EOF
+ftp -A -n <<EOF
 open $FTP_SERVER
 user $FTP_USER $FTP_PASS
 binary
@@ -40,7 +40,7 @@ chmod 644 0001_initial_schema.php
 quit
 EOF
 
-ftp -n <<EOF
+ftp -A -n <<EOF
 open $FTP_SERVER
 user $FTP_USER $FTP_PASS
 binary
