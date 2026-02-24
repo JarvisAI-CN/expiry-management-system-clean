@@ -1,0 +1,7 @@
+{
+  "active_task": "开发星巴克门店智能效期管理系统 V3.0.0",
+  "task_description": "使用 3A 工作流开发一个用于星巴克门店的 Web 效期管理系统",
+  "paused_at": null,
+  "context": "项目提示词: Project: 星巴克门店智能效期管理系统 (Starbucks Expiry Guard - Enterprise)\nRole: 资深 PHP 全栈架构师 / 系统集成专家\nTarget: 开发一个用于星巴克门店的 Web 效期管理系统。\nTech Stack: Backend: Native PHP 8.1+ 或 Slim 4\nDatabase: MySQL 8.0 (PDO模式)\nFrontend: Bootstrap 5 (Mobile-First 适配 iPad), jQuery, DataTables\nLibs: PHPMailer (邮件), PhpSpreadsheet (Excel), Guzzle (API请求)",
+  "progress": 0
+}
