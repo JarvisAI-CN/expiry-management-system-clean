@@ -382,6 +382,9 @@ if (isset($_SESSION['user'])) {
     <!-- jQuery -->
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     
+    <!-- QuaggaJS - 扫码库 -->
+    <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
+    
     <!-- Bootstrap 5 JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     
@@ -447,6 +450,12 @@ if (isset($_SESSION['user'])) {
                 <a href="stocktake.php" class="list-group-item list-group-item-action <?php echo basename($_SERVER['PHP_SELF']) == 'stocktake.php' ? 'active' : ''; ?>">
                     <i class="fas fa-boxes me-2"></i> 盘点系统
                 </a>
+                
+                <?php if ($currentUser['role'] === 'admin'): ?>
+                <a href="admin.php" class="list-group-item list-group-item-action <?php echo basename($_SERVER['PHP_SELF']) == 'admin.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tachometer-alt me-2"></i> 后台管理
+                </a>
+                <?php endif; ?>
                 
                 <div class="dropdown">
                     <a href="#" class="list-group-item list-group-item-action dropdown-toggle" data-bs-toggle="dropdown">
