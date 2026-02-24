@@ -92,6 +92,22 @@ CREATE TABLE IF NOT EXISTS `stocktake_sessions` (
     CONSTRAINT `stocktake_sessions_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='盘点会话表';
 
+-- 数据导入待办表
+CREATE TABLE IF NOT EXISTS `import_todo` (
+    `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '待办ID',
+    `sku` varchar(50) NOT NULL COMMENT 'SKU编码',
+    `product_name` varchar(200) NOT NULL COMMENT '物料名称',
+    `company_category_raw` varchar(200) NOT NULL COMMENT '原始分类',
+    `user_id` int(11) NOT NULL COMMENT '用户ID',
+    `status` enum('pending','processed','failed') NOT NULL DEFAULT 'pending' COMMENT '处理状态',
+    `error_message` text COMMENT '错误信息',
+    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    KEY `user_id` (`user_id`),
+    CONSTRAINT `import_todo_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='数据导入待办表';
+
 -- 盘点明细表
 CREATE TABLE IF NOT EXISTS `stocktake_items` (
     `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '盘点明细ID',

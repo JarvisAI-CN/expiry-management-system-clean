@@ -52,9 +52,7 @@ class ImportService {
     private function parsePhpSpreadsheet($filePath) {
         require_once 'PhpSpreadsheet/autoload.php';
         
-        use PhpOffice\PhpSpreadsheet\IOFactory;
-        
-        $spreadsheet = IOFactory::load($filePath);
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($filePath);
         $worksheet = $spreadsheet->getActiveSheet();
         $data = [];
 
