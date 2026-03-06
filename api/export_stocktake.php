@@ -59,6 +59,56 @@ if (!$authService->isAdmin()) {
     jsonResponse(['success' => false, 'message' => '权限不足，仅管理员可导出数据'], 403);
 }
 
+/**
+ * 导出频率限制检查
+ * 
+ * 防止用户过于频繁地导出数据，避免：
+ * - 服务器资源耗尽
+ * - 磁盘空间被大量占用
+ * - 恶意下载攻击
+ * 
+ * 规则：
+ * - 每小时最多10次导出
+ * - 使用SESSION存储计数器
+ * - 每小时自动重置
+ * 
+ * @return void
+ */
+function checkExportRateLimit(): void {
+    // 基于当前小时的key（每小时自动重置）
+    $key = 'export_count_' . date('YmdH');
+    
+    // 初始化计数器
+    if (!isset($_SESSION[$key])) {
+        $_SESSION[$key] = 0;
+    }
+    
+    // 检查是否超过限制
+    $maxExportsPerHour = 10;
+    if ($_SESSION[$key] >= $maxExportsPerHour) {
+        // 计算下次可导出时间
+        $nextHour = strtotime(date('Y-m-d H:00:00') . '+1 hour');
+        $waitMinutes = ceil(($nextHour - time()) / 60);
+        
+        jsonResponse([
+            'success' => false,
+            'message' => "导出过于频繁，每小时最多{$maxExportsPerHour}次",
+            'data' => [
+                'limit' => $maxExportsPerHour,
+                'current' => $_SESSION[$key],
+                'retry_after' => $waitMinutes * 60,
+                'retry_after_minutes' => $waitMinutes
+            ]
+        ], 429); // HTTP 429 Too Many Requests
+    }
+    
+    // 增加计数
+    $_SESSION[$key]++;
+}
+
+// 执行频率限制检查
+checkExportRateLimit();
+
 // 参数校验
 $sessionId = filter_input(INPUT_POST, 'session_id', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
 if (!$sessionId) {
