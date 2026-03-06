@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS `users` (
     `username` varchar(50) NOT NULL COMMENT '用户名',
     `password` varchar(255) NOT NULL COMMENT '密码（加密）',
     `email` varchar(100) NOT NULL COMMENT '邮箱地址',
+    `role` enum('user','admin') NOT NULL DEFAULT 'user' COMMENT '用户角色',
     `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `is_active` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否激活',
@@ -147,8 +148,8 @@ INSERT IGNORE INTO `categories` (`name`, `early_dispose_days`, `shelf_remove_day
 ('其他', 3, 1, 'weekly');
 
 -- 插入默认管理员（密码：admin123）
-INSERT IGNORE INTO `users` (`username`, `password`, `email`) VALUES 
-('admin', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'admin@starbucks-expiry.com');
+INSERT IGNORE INTO `users` (`username`, `password`, `email`, `role`) VALUES 
+('admin', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'admin@starbucks-expiry.com', 'admin');
 SQL;
         
         $this->pdo->exec($sql);

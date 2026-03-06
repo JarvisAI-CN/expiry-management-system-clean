@@ -32,7 +32,7 @@ class AuthService {
         try {
             // 查询用户
             $stmt = $this->pdo->prepare("
-                SELECT * FROM users WHERE username = ? OR email = ? AND is_active = 1
+                SELECT * FROM users WHERE (username = ? OR email = ?) AND is_active = 1
             ");
             
             $stmt->execute([$username, $username]);
@@ -112,7 +112,8 @@ class AuthService {
             'id' => $user['id'],
             'username' => $user['username'],
             'email' => $user['email'],
-            'is_active' => $user['is_active']
+            'is_active' => $user['is_active'],
+            'role' => $user['role'] // 添加角色信息
         ];
         
         // 更新最后登录时间
@@ -225,6 +226,29 @@ class AuthService {
         
         // 检查 remember cookie
         return $this->validateRememberCookie();
+    }
+    
+    /**
+     * 检查用户是否是管理员
+     * @return bool 是否是管理员
+     */
+    public function isAdmin() {
+        if (! $this->isLoggedIn()) {
+            return false;
+        }
+        
+        $user = $this->getCurrentUser();
+        
+        // 检查用户角色是否是管理员
+        // 这里假设 users 表中有一个 role 字段，值为 'admin' 表示管理员
+        $stmt = $this->pdo->prepare("
+            SELECT role FROM users WHERE id = ?
+        ");
+        
+        $stmt->execute([$user['id']]);
+        $userInfo = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        return $userInfo['role'] === 'admin';
     }
 
     /**

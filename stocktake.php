@@ -298,6 +298,21 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
                         </form>
                     </div>
                 </div>
+            </div>
+
+            <!-- 右侧：添加产品 -->
+            <div class="col-md-8">
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="card-title">
+                                <i class="fas fa-plus-circle"></i> 添加产品
+                            </h5>
+                            <button type="button" class="btn btn-primary" id="scanBtn" data-bs-toggle="modal" data-bs-target="#scanModal">
+                                <i class="fas fa-qrcode"></i> 扫码识别
+                            </button>
+                        </div>
+                </div>
                 
                 <!-- 新增项目 -->
                 <?php if ($currentSession['status'] !== 'completed'): ?>
@@ -638,6 +653,46 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
     </div>
 </div>
 
+<!-- 扫码识别模态框 -->
+<div class="modal fade" id="scanModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-qrcode"></i> 扫码识别
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <video id="video" width="100%" height="auto" autoplay playsinline></video>
+                    <canvas id="canvas" style="display: none;"></canvas>
+                </div>
+                <div class="mb-3">
+                    <button type="button" class="btn btn-primary w-100" id="startScanBtn">
+                        <i class="fas fa-play"></i> 开始扫描
+                    </button>
+                    <button type="button" class="btn btn-secondary w-100 mt-2" id="stopScanBtn" style="display: none;">
+                        <i class="fas fa-stop"></i> 停止扫描
+                    </button>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">扫描结果</label>
+                    <input type="text" class="form-control" id="scanResult" readonly>
+                </div>
+                <div class="mb-3">
+                    <button type="button" class="btn btn-success w-100" id="autoFillBtn" disabled>
+                        <i class="fas fa-magic"></i> 自动填充
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- 删除项目表单 -->
 <form id="deleteItemForm" method="post" style="display: none;">
     <input type="hidden" name="action" value="delete_item">
@@ -684,6 +739,113 @@ $pageTitle = '盘点系统 - 星巴克门店智能效期管理系统';
     // 查看分析按钮
     $('#viewAnalysisBtn').click(function() {
         $('#analysisSection').toggle();
+    });
+    
+    // 扫码功能
+    let scanner = null;
+    
+    // 初始化扫码器
+    function initScanner() {
+        if (!scanner) {
+            scanner = new QuaggaJS();
+        }
+    }
+    
+    // 开始扫描
+    function startScanner() {
+        initScanner();
+        
+        scanner.init({
+            inputStream: {
+                type: "LiveStream",
+                target: document.querySelector('#video'),
+                constraints: {
+                    facingMode: "environment" // 使用后置摄像头
+                }
+            },
+            decoder: {
+                readers: ["ean_reader", "ean_8_reader", "code_128_reader"]
+            }
+        }, function(err) {
+            if (err) {
+                console.error(err);
+                showError('无法启动摄像头');
+                return;
+            }
+            
+            console.log('扫码器已启动');
+            scanner.start();
+        });
+        
+        // 扫描成功事件
+        scanner.onDetected(function(data) {
+            const code = data.codeResult.code;
+            $('#scanResult').val(code);
+            $('#autoFillBtn').prop('disabled', false);
+            stopScanner();
+        });
+    }
+    
+    // 停止扫描
+    function stopScanner() {
+        if (scanner) {
+            scanner.stop();
+        }
+    }
+    
+    // 开始扫描按钮点击事件
+    $('#startScanBtn').click(function() {
+        startScanner();
+        $(this).hide();
+        $('#stopScanBtn').show();
+    });
+    
+    // 停止扫描按钮点击事件
+    $('#stopScanBtn').click(function() {
+        stopScanner();
+        $(this).hide();
+        $('#startScanBtn').show();
+    });
+    
+    // 自动填充按钮点击事件
+    $('#autoFillBtn').click(function() {
+        const code = $('#scanResult').val();
+        if (!code) {
+            showError('请先扫描条形码');
+            return;
+        }
+        
+        // 模拟产品搜索和自动填充
+        $.ajax({
+            url: 'api/search_product.php',
+            type: 'GET',
+            data: {
+                barcode: code
+            },
+            dataType: 'json',
+            success: function(response) {
+                if (response.success && response.product) {
+                    const product = response.product;
+                    $('#product_id').val(product.id);
+                    showSuccess('产品自动填充成功！');
+                } else {
+                    showError('未找到对应的产品');
+                }
+            },
+            error: function(xhr, status, error) {
+                console.error(error);
+                showError('产品搜索失败');
+            }
+        });
+    });
+    
+    // 模态框关闭事件
+    $('#scanModal').on('hidden.bs.modal', function() {
+        stopScanner();
+        $('#startScanBtn').show();
+        $('#stopScanBtn').hide();
+        $('#scanResult').val('');
+        $('#autoFillBtn').prop('disabled', true);
     });
     
     // 表单提交
