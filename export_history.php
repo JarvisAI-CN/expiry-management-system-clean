@@ -1,10 +1,11 @@
 <?php
 /**
  * 星巴克门店智能效期管理系统 V3.0.0
- * 盘点历史记录页面
+ * 盘点历史记录页面（安全增强版）
  * 功能：查看所有盘点历史记录
  * 作者：资深 PHP 全栈架构师
  * 日期：2026-03-06
+ * 安全改进：管理员权限校验、CSRF防护、XSS防护、状态白名单
  */
 
 session_start();
@@ -33,6 +34,18 @@ if (!$authService->isLoggedIn()) {
     exit;
 }
 
+// 检查管理员权限
+if (!$authService->isAdmin()) {
+    http_response_code(403);
+    exit('权限不足，仅管理员可访问');
+}
+
+// 生成CSRF Token
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf_token'];
+
 // 获取所有盘点记录
 try {
     $stmt = $pdo->query("
@@ -60,7 +73,7 @@ try {
     $sessions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $sessions = [];
-    $error = "获取盘点记录失败: " . $e->getMessage();
+    $error = "获取盘点记录失败，请联系管理员";
 }
 
 // 页面标题
@@ -207,7 +220,7 @@ $pageTitle = "盘点历史 - 星巴克效期管理系统";
             <div class="col-12">
                 <div class="card">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <span><i class="fas fa-history"></i> 盘点历史记录</span>
+                        <span><i class="fas fa-history"></i> 盘点历史记录（管理员专用）</span>
                         <button class="btn btn-light btn-sm" onclick="location.reload()">
                             <i class="fas fa-sync-alt"></i> 刷新
                         </button>
@@ -242,22 +255,28 @@ $pageTitle = "盘点历史 - 星巴克效期管理系统";
                                     </thead>
                                     <tbody>
                                         <?php foreach ($sessions as $session): ?>
+                                            <?php
+                                            // 状态白名单，避免XSS
+                                            $status = $session['status'] ?? 'draft';
+                                            $statusClass = $status === 'completed' ? 'completed' : 'draft';
+                                            $statusText = $status === 'completed' ? '已完成' : '草稿';
+                                            ?>
                                             <tr>
                                                 <td><?php echo htmlspecialchars($session['session_code']); ?></td>
                                                 <td><?php echo htmlspecialchars($session['description'] ?? '-'); ?></td>
                                                 <td>
-                                                    <span class="status-badge status-<?php echo $session['status']; ?>">
-                                                        <?php echo $session['status'] === 'completed' ? '已完成' : '草稿'; ?>
+                                                    <span class="status-badge status-<?php echo $statusClass; ?>">
+                                                        <?php echo $statusText; ?>
                                                     </span>
                                                 </td>
                                                 <td><?php echo date('Y-m-d H:i', strtotime($session['created_at'])); ?></td>
-                                                <td><?php echo $session['item_count']; ?></td>
-                                                <td class="text-danger"><?php echo $session['expired_count']; ?></td>
-                                                <td class="text-warning"><?php echo $session['expiring_soon_count']; ?></td>
+                                                <td><?php echo (int)$session['item_count']; ?></td>
+                                                <td class="text-danger"><?php echo (int)$session['expired_count']; ?></td>
+                                                <td class="text-warning"><?php echo (int)$session['expiring_soon_count']; ?></td>
                                                 <td>
-                                                    <?php if ($session['status'] === 'completed'): ?>
+                                                    <?php if ($status === 'completed'): ?>
                                                         <button class="btn btn-export btn-sm"
-                                                                onclick="exportStocktake(<?php echo $session['id']; ?>)">
+                                                                onclick="exportStocktake(<?php echo (int)$session['id']; ?>)">
                                                             <i class="fas fa-file-export"></i> 导出
                                                         </button>
                                                     <?php else: ?>
@@ -287,45 +306,43 @@ $pageTitle = "盘点历史 - 星巴克效期管理系统";
     <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
 
     <script>
-        $(document).ready(function() {
-            $('#historyTable').DataTable({
-                language: {
-                    url: '//cdn.datatables.net/plug-ins/1.13.4/i18n/zh.json'
-                },
-                pageLength: 25,
-                order: [[3, 'desc']]
-            });
+    $(document).ready(function() {
+        $('#historyTable').DataTable({
+            language: {
+                url: '//cdn.datatables.net/plug-ins/1.13.4/i18n/zh.json'
+            },
+            pageLength: 25,
+            order: [[3, 'desc']]
         });
+    });
 
-        function exportStocktake(sessionId) {
-            if (!confirm('确定要导出此盘点数据吗？')) {
-                return;
-            }
+    function exportStocktake(sessionId) {
+        if (!confirm('确定要导出此盘点数据吗？')) return;
 
-            // 调用导出API
-            $.ajax({
-                url: 'api/export_stocktake.php',
-                method: 'GET',
-                data: { session_id: sessionId },
-                dataType: 'json',
-                success: function(response) {
-                    if (response.success) {
-                        // 下载文件
-                        const link = document.createElement('a');
-                        link.href = response.data.download_url;
-                        link.download = response.data.filename;
-                        link.click();
-
-                        alert('导出成功！共 ' + response.data.record_count + ' 条记录');
-                    } else {
-                        alert('导出失败：' + response.message);
-                    }
-                },
-                error: function() {
-                    alert('导出失败，请稍后重试');
+        $.ajax({
+            url: 'api/export_stocktake.php',
+            method: 'POST',
+            data: { session_id: sessionId },
+            headers: {
+                'X-CSRF-Token': '<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, "UTF-8"); ?>'
+            },
+            dataType: 'json',
+            success: function(response) {
+                if (response.success) {
+                    const link = document.createElement('a');
+                    link.href = response.data.download_url;
+                    link.download = response.data.filename;
+                    link.click();
+                    alert('导出成功！共 ' + response.data.record_count + ' 条记录');
+                } else {
+                    alert('导出失败：' + response.message);
                 }
-            });
-        }
+            },
+            error: function(xhr) {
+                alert('导出失败，请稍后重试');
+            }
+        });
+    }
     </script>
 </body>
 </html>

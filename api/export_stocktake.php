@@ -1,64 +1,109 @@
 <?php
+declare(strict_types=1);
+
 /**
  * 星巴克门店智能效期管理系统 V3.0.0
- * 盘点数据导出API
- * 功能：导出盘点数据为Excel文件
+ * 盘点数据导出API（安全增强版）
+ * 功能：导出盘点数据为CSV文件
  * 作者：资深 PHP 全栈架构师
  * 日期：2026-03-06
+ * 安全改进：POST+CSRF、CSV注入防护、流式写入、权限强化
  */
 
 session_start();
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=utf-8');
 
-// 引入必要的类文件
 require_once '../core/Database.php';
 require_once '../core/AuthService.php';
 
-// 加载数据库配置
 $config = include '../config/database.php';
-
-// 创建数据库连接
 $database = new Database($config);
 $pdo = $database->getConnection();
 
-// 创建鉴权服务
 $authService = new AuthService($pdo, [
-    'domain' => $_SERVER['HTTP_HOST'],
-    'secure' => isset($_SERVER['HTTPS'])
+    'domain' => $_SERVER['HTTP_HOST'] ?? '',
+    'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'
 ]);
 
-// 检查用户登录状态
+function jsonResponse(array $payload, int $status = 200): void {
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+function sanitizeCsvCell($value): string {
+    $str = (string)($value ?? '');
+    // 防 CSV/Excel 公式注入
+    if ($str !== '' && preg_match('/^[=\-+@]/', $str)) {
+        $str = "'" . $str;
+    }
+    return $str;
+}
+
+// 仅允许 POST，避免被简单链接触发
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    jsonResponse(['success' => false, 'message' => 'Method Not Allowed'], 405);
+}
+
+// CSRF 校验（前端需传 X-CSRF-Token）
+$csrfFromHeader = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+$csrfFromSession = $_SESSION['csrf_token'] ?? '';
+if (!$csrfFromHeader || !$csrfFromSession || !hash_equals($csrfFromSession, $csrfFromHeader)) {
+    jsonResponse(['success' => false, 'message' => 'CSRF校验失败'], 403);
+}
+
 if (!$authService->isLoggedIn()) {
-    echo json_encode([
-        'success' => false,
-        'message' => '请先登录'
-    ]);
-    exit;
+    jsonResponse(['success' => false, 'message' => '请先登录'], 401);
 }
-
-// 检查是否是管理员
 if (!$authService->isAdmin()) {
-    echo json_encode([
-        'success' => false,
-        'message' => '权限不足，仅管理员可导出数据'
-    ]);
-    exit;
+    jsonResponse(['success' => false, 'message' => '权限不足，仅管理员可导出数据'], 403);
 }
 
-// 获取请求参数
-$session_id = $_GET['session_id'] ?? null;
-
-if (!$session_id) {
-    echo json_encode([
-        'success' => false,
-        'message' => '缺少盘点单ID'
-    ]);
-    exit;
+// 参数校验
+$sessionId = filter_input(INPUT_POST, 'session_id', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+if (!$sessionId) {
+    jsonResponse(['success' => false, 'message' => '缺少或非法盘点单ID'], 400);
 }
 
 try {
-    // 查询盘点数据
-    $stmt = $pdo->prepare("
+    // 先校验盘点单状态
+    $checkStmt = $pdo->prepare("SELECT session_code, status FROM stocktake_sessions WHERE id = :id LIMIT 1");
+    $checkStmt->execute([':id' => $sessionId]);
+    $sessionInfo = $checkStmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$sessionInfo) {
+        jsonResponse(['success' => false, 'message' => '盘点单不存在'], 404);
+    }
+    if (($sessionInfo['status'] ?? '') !== 'completed') {
+        jsonResponse(['success' => false, 'message' => '仅可导出已完成的盘点单'], 400);
+    }
+
+    // 文件准备
+    $safeSessionCode = preg_replace('/[^A-Za-z0-9_\-]/', '_', (string)$sessionInfo['session_code']);
+    $filename = 'stocktake_' . $safeSessionCode . '_' . date('YmdHis') . '.csv';
+    $exportDir = dirname(__DIR__) . '/exports';
+
+    if (!is_dir($exportDir) && !mkdir($exportDir, 0700, true) && !is_dir($exportDir)) {
+        throw new RuntimeException('无法创建导出目录');
+    }
+
+    $tempFile = $exportDir . '/' . $filename;
+    $fp = fopen($tempFile, 'wb');
+    if ($fp === false) {
+        throw new RuntimeException('无法创建导出文件');
+    }
+
+    // UTF-8 BOM
+    fwrite($fp, "\xEF\xBB\xBF");
+
+    // 表头
+    fputcsv($fp, [
+        '盘点单号','盘点描述','状态','创建时间','SKU','商品名称','公司分类',
+        '系统分类','数量','效期','批号','备注','提前报废天数','提前下架天数'
+    ]);
+
+    // 流式查询/写入，避免 fetchAll 占内存
+    $sql = "
         SELECT
             si.session_code,
             si.description,
@@ -75,77 +120,56 @@ try {
             c.advance_scrap_days,
             c.advance_offline_days
         FROM stocktake_sessions si
-        LEFT JOIN stocktake_entries se ON si.id = se.session_id
+        INNER JOIN stocktake_entries se ON si.id = se.session_id
         LEFT JOIN products p ON se.product_id = p.id
         LEFT JOIN categories c ON p.category_id = c.id
-        WHERE si.id = ?
+        WHERE si.id = :session_id
         ORDER BY se.expiry_date ASC
-    ");
+    ";
 
-    $stmt->execute([$session_id]);
-    $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':session_id' => $sessionId]);
 
-    if (empty($data)) {
-        echo json_encode([
-            'success' => false,
-            'message' => '未找到盘点数据'
+    $count = 0;
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        fputcsv($fp, [
+            sanitizeCsvCell($row['session_code'] ?? ''),
+            sanitizeCsvCell($row['description'] ?? ''),
+            sanitizeCsvCell($row['status'] ?? ''),
+            sanitizeCsvCell($row['created_at'] ?? ''),
+            sanitizeCsvCell($row['sku'] ?? ''),
+            sanitizeCsvCell($row['product_name'] ?? ''),
+            sanitizeCsvCell($row['company_category'] ?? ''),
+            sanitizeCsvCell($row['category_name'] ?? ''),
+            (int)($row['quantity'] ?? 0),
+            sanitizeCsvCell($row['expiry_date'] ?? ''),
+            sanitizeCsvCell($row['batch_number'] ?? ''),
+            sanitizeCsvCell($row['notes'] ?? ''),
+            (int)($row['advance_scrap_days'] ?? 0),
+            (int)($row['advance_offline_days'] ?? 0),
         ]);
-        exit;
+        $count++;
     }
 
-    // 生成CSV数据
-    $csvContent = "\xEF\xBB\xBF"; // UTF-8 BOM
+    fclose($fp);
 
-    // CSV表头
-    $csvContent .= "盘点单号,盘点描述,状态,创建时间,SKU,商品名称,公司分类,系统分类,数量,效期,批号,备注,提前报废天数,提前下架天数\n";
-
-    // CSV数据行
-    foreach ($data as $row) {
-        $csvContent .= sprintf(
-            "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n",
-            $row['session_code'] ?? '',
-            $row['description'] ?? '',
-            $row['status'] ?? '',
-            $row['created_at'] ?? '',
-            $row['sku'] ?? '',
-            $row['product_name'] ?? '',
-            $row['company_category'] ?? '',
-            $row['category_name'] ?? '',
-            $row['quantity'] ?? 0,
-            $row['expiry_date'] ?? '',
-            $row['batch_number'] ?? '',
-            $row['notes'] ?? '',
-            $row['advance_scrap_days'] ?? 0,
-            $row['advance_offline_days'] ?? 0
-        );
+    if ($count === 0) {
+        @unlink($tempFile);
+        jsonResponse(['success' => false, 'message' => '未找到可导出的盘点明细'], 404);
     }
 
-    // 生成文件名
-    $filename = 'stocktake_' . $data[0]['session_code'] . '_' . date('YmdHis') . '.csv';
-
-    // 保存到临时文件
-    $tempFile = '../exports/' . $filename;
-    if (!is_dir('../exports')) {
-        mkdir('../exports', 0755, true);
-    }
-
-    file_put_contents($tempFile, $csvContent);
-
-    // 返回下载链接
-    echo json_encode([
+    jsonResponse([
         'success' => true,
         'message' => '导出成功',
         'data' => [
             'filename' => $filename,
-            'download_url' => '/exports/' . $filename,
-            'record_count' => count($data),
-            'file_size' => filesize($tempFile)
+            'download_url' => '/exports/' . rawurlencode($filename),
+            'record_count' => $count,
+            'file_size' => filesize($tempFile) ?: 0
         ]
     ]);
 
-} catch (Exception $e) {
-    echo json_encode([
-        'success' => false,
-        'message' => '导出失败：' . $e->getMessage()
-    ]);
+} catch (Throwable $e) {
+    error_log('[export_stocktake] ' . $e->getMessage());
+    jsonResponse(['success' => false, 'message' => '导出失败，请联系管理员'], 500);
 }
