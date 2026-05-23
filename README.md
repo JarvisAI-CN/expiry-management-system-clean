@@ -1,3 +1,4 @@
+> 最新手机扫码盘点版已发布：[`v3.2.0 - 手机扫码盘点版`](https://github.com/JarvisAI-CN/expiry-management-system-clean/releases/tag/v3.2.0)。该版本位于 `mobile-sqlite-v3.2.0` 分支，适合直接部署到 PHP + SQLite 环境，线上验证地址为 `http://xq.80z.top/`。
 # 星巴克门店智能效期管理系统 V3.0.0 - 功能说明
 
 相关笔记：
