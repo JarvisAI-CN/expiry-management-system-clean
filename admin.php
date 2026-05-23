@@ -1,675 +1,251 @@
 <?php
-/**
- * 星巴克门店智能效期管理系统 V3.0.0
- * 后台管理页面
- * 功能：系统配置、用户管理、分类管理、物料管理、数据导入、AI配置、邮件配置
- * 作者：资深 PHP 全栈架构师
- * 日期：2026-02-24
- */
+declare(strict_types=1);
 
-session_start();
+require __DIR__ . '/app/bootstrap.php';
 
-// 引入必要的类文件和函数库
-require_once 'includes/functions.php';
-require_once 'core/Database.php';
-require_once 'core/AuthService.php';
-
-// 加载数据库配置
-$config = include 'config/database.php';
-
-// 创建数据库连接
-$database = new Database($config);
-$pdo = $database->getConnection();
-
-// 创建鉴权服务
-$authConfig = [
-    'domain' => $_SERVER['HTTP_HOST'],
-    'secure' => isset($_SERVER['HTTPS'])
-];
-
-$authService = new AuthService($pdo, $authConfig);
-
-// 检查用户登录状态
-if (!$authService->isLoggedIn()) {
-    header('Location: login.php');
-    exit;
-}
-
-// 检查用户权限
-if (!$authService->isAdmin()) {
-    header('Location: dashboard.php');
-    exit;
-}
-
-// 页面管理
-$currentTab = $_GET['tab'] ?? 'dashboard';
-
-// 处理用户管理操作
-$success = '';
-$error = '';
+$pdo = db();
+$notice = null;
+$error = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = (string) ($_POST['action'] ?? '');
+
     try {
-        $action = $_POST['action'] ?? '';
-        
-        if ($action === 'add_user') {
-            // 添加用户
-            $username = $_POST['username'] ?? '';
-            $password = $_POST['password'] ?? '';
-            $email = $_POST['email'] ?? '';
-            $role = $_POST['role'] ?? 'user';
-            
-            // 验证输入
-            if (empty($username) || empty($password) || empty($email)) {
-                throw new Exception("用户名、密码和邮箱不能为空");
-            }
-            
-            if (strlen($password) < 6) {
-                throw new Exception("密码长度至少需要6个字符");
-            }
-            
-            // 检查用户名是否已存在
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
-            $stmt->execute([$username]);
-            if ($stmt->rowCount() > 0) {
-                throw new Exception("用户名已存在");
-            }
-            
-            // 检查邮箱是否已存在
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
-            $stmt->execute([$email]);
-            if ($stmt->rowCount() > 0) {
-                throw new Exception("邮箱已存在");
-            }
-            
-            // 加密密码
-            $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-            
-            // 添加用户
-            $stmt = $pdo->prepare("
-                INSERT INTO users (username, password, email, role, created_at, updated_at) 
-                VALUES (?, ?, ?, ?, NOW(), NOW())
-            ");
-            
-            $stmt->execute([$username, $hashedPassword, $email, $role]);
-            
-            $success = "用户添加成功！";
-            
-        } elseif ($action === 'delete_user') {
-            // 删除用户
-            $userId = intval($_POST['user_id'] ?? 0);
-            
-            if ($userId <= 0) {
-                throw new Exception("无效的用户ID");
-            }
-            
-            // 不能删除自己
-            $currentUser = $authService->getCurrentUser();
-            if ($userId === $currentUser['id']) {
-                throw new Exception("不能删除自己");
-            }
-            
-            // 不能删除管理员账户
-            $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
-            $stmt->execute([$userId]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user['role'] === 'admin') {
-                throw new Exception("不能删除管理员账户");
-            }
-            
-            // 删除用户
-            $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
-            $stmt->execute([$userId]);
-            
-            $success = "用户删除成功！";
-            
-        } elseif ($action === 'update_user') {
-            // 更新用户
-            $userId = intval($_POST['user_id'] ?? 0);
-            $username = $_POST['username'] ?? '';
-            $email = $_POST['email'] ?? '';
-            $role = $_POST['role'] ?? 'user';
-            
-            if ($userId <= 0 || empty($username) || empty($email)) {
-                throw new Exception("参数不完整");
-            }
-            
-            // 检查用户名是否已存在（排除当前用户）
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ? AND id != ?");
-            $stmt->execute([$username, $userId]);
-            if ($stmt->rowCount() > 0) {
-                throw new Exception("用户名已存在");
-            }
-            
-            // 检查邮箱是否已存在（排除当前用户）
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $stmt->execute([$email, $userId]);
-            if ($stmt->rowCount() > 0) {
-                throw new Exception("邮箱已存在");
-            }
-            
-            // 更新用户信息
-            $stmt = $pdo->prepare("
-                UPDATE users 
-                SET username = ?, email = ?, role = ?, updated_at = NOW() 
-                WHERE id = ?
-            ");
-            
-            $stmt->execute([$username, $email, $role, $userId]);
-            
-            $success = "用户信息更新成功！";
-            
-        } elseif ($action === 'change_password') {
-            // 更改密码
-            $userId = intval($_POST['user_id'] ?? 0);
-            $newPassword = $_POST['new_password'] ?? '';
-            
-            if ($userId <= 0 || empty($newPassword) || strlen($newPassword) < 6) {
-                throw new Exception("无效的密码参数");
-            }
-            
-            $hashedPassword = password_hash($newPassword, PASSWORD_DEFAULT);
-            
-            $stmt = $pdo->prepare("
-                UPDATE users 
-                SET password = ?, updated_at = NOW() 
-                WHERE id = ?
-            ");
-            
-            $stmt->execute([$hashedPassword, $userId]);
-            
-            $success = "密码更新成功！";
+        if ($action === 'save_product') {
+            $saved = upsert_product(
+                $pdo,
+                (string) ($_POST['sku'] ?? ''),
+                (string) ($_POST['name'] ?? ''),
+                (string) ($_POST['category'] ?? ''),
+                $_POST['alert_days'] ?? null,
+                $_POST['shelf_remove_days'] ?? null
+            );
+            $notice = $saved ? '商品已保存。' : 'SKU 和商品名称都要填写。';
         }
-    } catch (Exception $e) {
-        $error = $e->getMessage();
+
+        if ($action === 'paste_import') {
+            $result = import_products_from_text($pdo, (string) ($_POST['products_text'] ?? ''));
+            $notice = "已导入 {$result['imported']} 条，跳过 {$result['skipped']} 条。";
+        }
+
+        if ($action === 'upload_csv') {
+            if (!isset($_FILES['products_file']) || $_FILES['products_file']['error'] !== UPLOAD_ERR_OK) {
+                throw new RuntimeException('文件上传失败。');
+            }
+
+            $content = file_get_contents($_FILES['products_file']['tmp_name']);
+            if ($content === false || trim($content) === '') {
+                throw new RuntimeException('文件内容为空。');
+            }
+
+            $result = import_products_from_text($pdo, $content);
+            $notice = "已导入 {$result['imported']} 条，跳过 {$result['skipped']} 条。";
+        }
+
+        if ($action === 'delete_product') {
+            $sku = normalize_sku((string) ($_POST['sku'] ?? ''));
+            $stmt = $pdo->prepare('DELETE FROM products WHERE sku = :sku');
+            $stmt->execute([':sku' => $sku]);
+            $notice = '商品已删除。';
+        }
+
+        if ($action === 'save_ai_settings') {
+            $newKey = trim((string) ($_POST['minimax_key'] ?? ''));
+            $clearKey = isset($_POST['clear_minimax_key']);
+            $model = trim((string) ($_POST['minimax_model'] ?? 'MiniMax-M2.7'));
+            $endpoint = trim((string) ($_POST['minimax_endpoint'] ?? 'https://api.minimaxi.com/anthropic/v1/messages'));
+
+            if ($clearKey) {
+                set_setting($pdo, 'minimax_token_plan_key', null);
+            } elseif ($newKey !== '') {
+                set_setting($pdo, 'minimax_token_plan_key', $newKey);
+            }
+
+            set_setting($pdo, 'minimax_model', $model !== '' ? $model : 'MiniMax-M2.7');
+            set_setting($pdo, 'minimax_endpoint', $endpoint !== '' ? $endpoint : 'https://api.minimaxi.com/anthropic/v1/messages');
+            $notice = 'AI 设置已保存。';
+        }
+    } catch (Throwable $exception) {
+        $error = $exception->getMessage();
     }
 }
 
-// 获取所有用户列表
-$users = [];
-$stmt = $pdo->prepare("
-    SELECT id, username, email, role, created_at, updated_at 
-    FROM users 
-    ORDER BY created_at DESC
-");
-$stmt->execute();
-$users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$q = trim((string) ($_GET['q'] ?? ''));
+$params = [];
+$where = '';
 
-// 设置页面标题
-$pageTitle = '后台管理 - 星巴克门店智能效期管理系统';
+if ($q !== '') {
+    $where = 'WHERE sku LIKE :q OR sku LIKE :q_sku OR display_sku LIKE :q OR name LIKE :q OR category LIKE :q';
+    $params[':q'] = '%' . $q . '%';
+    $params[':q_sku'] = '%' . normalize_sku($q) . '%';
+}
 
+$stmt = $pdo->prepare("SELECT * FROM products {$where} ORDER BY updated_at DESC, sku ASC LIMIT 300");
+$stmt->execute($params);
+$products = $stmt->fetchAll();
+
+$count = (int) $pdo->query('SELECT COUNT(*) FROM products')->fetchColumn();
+$categoryCount = (int) $pdo->query("SELECT COUNT(DISTINCT category) FROM products WHERE category IS NOT NULL AND category <> ''")->fetchColumn();
+$minimaxKey = get_setting($pdo, 'minimax_token_plan_key', '');
+$minimaxModel = get_setting($pdo, 'minimax_model', 'MiniMax-M2.7') ?: 'MiniMax-M2.7';
+$minimaxEndpoint = get_setting($pdo, 'minimax_endpoint', 'https://api.minimaxi.com/anthropic/v1/messages') ?: 'https://api.minimaxi.com/anthropic/v1/messages';
 ?>
-<?php include 'includes/header.php'; ?>
-
-<div class="container-fluid">
-    <div class="row">
-        <!-- 侧边栏 -->
-        <div class="col-md-3 sidebar">
-            <div class="sidebar-content">
-                <h4><i class="fas fa-tachometer-alt"></i> 后台管理</h4>
-                <ul class="nav flex-column">
-                    <li class="nav-item">
-                        <a href="admin.php" class="nav-link <?php echo $currentTab === 'dashboard' ? 'active' : ''; ?>">
-                            <i class="fas fa-home"></i> 后台首页
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="admin.php?tab=users" class="nav-link <?php echo $currentTab === 'users' ? 'active' : ''; ?>">
-                            <i class="fas fa-users"></i> 用户管理
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="admin.php?tab=categories" class="nav-link <?php echo $currentTab === 'categories' ? 'active' : ''; ?>">
-                            <i class="fas fa-th-large"></i> 分类管理
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="admin.php?tab=products" class="nav-link <?php echo $currentTab === 'products' ? 'active' : ''; ?>">
-                            <i class="fas fa-box"></i> 物料管理
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="admin.php?tab=import" class="nav-link <?php echo $currentTab === 'import' ? 'active' : ''; ?>">
-                            <i class="fas fa-upload"></i> 数据导入
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="admin.php?tab=ai" class="nav-link <?php echo $currentTab === 'ai' ? 'active' : ''; ?>">
-                            <i class="fas fa-robot"></i> AI配置
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="admin.php?tab=email" class="nav-link <?php echo $currentTab === 'email' ? 'active' : ''; ?>">
-                            <i class="fas fa-envelope"></i> 邮件配置
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="dashboard.php" class="nav-link">
-                            <i class="fas fa-arrow-left"></i> 返回首页
-                        </a>
-                    </li>
-                </ul>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>SKU 后台</title>
+    <link rel="stylesheet" href="assets/app.css?v=20260523-4">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">后台</p>
+                <h1>SKU 商品库</h1>
             </div>
-        </div>
-
-        <!-- 主内容区域 -->
-        <div class="col-md-9">
-            <div class="page-content">
-                <!-- 成功/错误提示 -->
-                <?php if (!empty($success)): ?>
-                    <div class="alert alert-success alert-dismissible fade show">
-                        <i class="fas fa-check-circle"></i> <?php echo $success; ?>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                <?php endif; ?>
-                
-                <?php if (!empty($error)): ?>
-                    <div class="alert alert-danger alert-dismissible fade show">
-                        <i class="fas fa-exclamation-circle"></i> <?php echo $error; ?>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                <?php endif; ?>
-
-                <!-- 后台首页 -->
-                <?php if ($currentTab === 'dashboard'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <h5 class="card-title">
-                                        <i class="fas fa-tachometer-alt"></i> 后台管理首页
-                                    </h5>
-                                    <p class="card-text">欢迎来到星巴克门店智能效期管理系统后台管理界面</p>
-                                    <div class="row mt-4">
-                                        <div class="col-md-3">
-                                            <div class="card text-center">
-                                                <div class="card-body">
-                                                    <div class="text-primary mb-2">
-                                                        <i class="fas fa-users fa-3x"></i>
-                                                    </div>
-                                                    <h3><?php echo count($users); ?></h3>
-                                                    <p class="text-muted">用户总数</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-3">
-                                            <div class="card text-center">
-                                                <div class="card-body">
-                                                    <div class="text-success mb-2">
-                                                        <i class="fas fa-box fa-3x"></i>
-                                                    </div>
-                                                    <h3><?php 
-                                                        $stmt = $pdo->prepare("SELECT COUNT(*) FROM products");
-                                                        $stmt->execute();
-                                                        echo $stmt->fetchColumn();
-                                                    ?></h3>
-                                                    <p class="text-muted">物料总数</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-3">
-                                            <div class="card text-center">
-                                                <div class="card-body">
-                                                    <div class="text-info mb-2">
-                                                        <i class="fas fa-th-large fa-3x"></i>
-                                                    </div>
-                                                    <h3><?php 
-                                                        $stmt = $pdo->prepare("SELECT COUNT(*) FROM categories");
-                                                        $stmt->execute();
-                                                        echo $stmt->fetchColumn();
-                                                    ?></h3>
-                                                    <p class="text-muted">分类总数</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="col-md-3">
-                                            <div class="card text-center">
-                                                <div class="card-body">
-                                                    <div class="text-warning mb-2">
-                                                        <i class="fas fa-calendar-check fa-3x"></i>
-                                                    </div>
-                                                    <h3><?php 
-                                                        $stmt = $pdo->prepare("SELECT COUNT(*) FROM stocktake_sessions");
-                                                        $stmt->execute();
-                                                        echo $stmt->fetchColumn();
-                                                    ?></h3>
-                                                    <p class="text-muted">盘点记录</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- 用户管理 -->
-                <?php if ($currentTab === 'users'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-center mb-3">
-                                        <h5 class="card-title">
-                                            <i class="fas fa-users"></i> 用户管理
-                                        </h5>
-                                        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
-                                            <i class="fas fa-plus"></i> 添加用户
-                                        </button>
-                                    </div>
-
-                                    <div class="table-responsive">
-                                        <table class="table table-striped">
-                                            <thead>
-                                                <tr>
-                                                    <th>用户名</th>
-                                                    <th>邮箱</th>
-                                                    <th>角色</th>
-                                                    <th>创建时间</th>
-                                                    <th>操作</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <?php foreach ($users as $user): ?>
-                                                <tr>
-                                                    <td><?php echo escapeHtml($user['username']); ?></td>
-                                                    <td><?php echo escapeHtml($user['email']); ?></td>
-                                                    <td>
-                                                        <span class="badge bg-<?php echo $user['role'] === 'admin' ? 'danger' : 'secondary'; ?>">
-                                                            <?php echo $user['role'] === 'admin' ? '管理员' : '普通用户'; ?>
-                                                        </span>
-                                                    </td>
-                                                    <td><?php echo formatDate($user['created_at']); ?></td>
-                                                    <td>
-                                                        <button type="button" class="btn btn-sm btn-secondary edit-user-btn"
-                                                                data-id="<?php echo $user['id']; ?>"
-                                                                data-username="<?php echo $user['username']; ?>"
-                                                                data-email="<?php echo $user['email']; ?>"
-                                                                data-role="<?php echo $user['role']; ?>">
-                                                            <i class="fas fa-edit"></i> 编辑
-                                                        </button>
-                                                        <button type="button" class="btn btn-sm btn-danger delete-user-btn"
-                                                                data-id="<?php echo $user['id']; ?>"
-                                                                data-username="<?php echo $user['username']; ?>">
-                                                            <i class="fas fa-trash"></i> 删除
-                                                        </button>
-                                                        <button type="button" class="btn btn-sm btn-info change-password-btn"
-                                                                data-id="<?php echo $user['id']; ?>"
-                                                                data-username="<?php echo $user['username']; ?>">
-                                                            <i class="fas fa-key"></i> 密码
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                                <?php endforeach; ?>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- 分类管理 -->
-                <?php if ($currentTab === 'categories'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <h5 class="card-title">
-                                        <i class="fas fa-th-large"></i> 分类管理
-                                    </h5>
-                                    <p class="card-text">分类管理功能将在后续版本中实现</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- 物料管理 -->
-                <?php if ($currentTab === 'products'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <h5 class="card-title">
-                                        <i class="fas fa-box"></i> 物料管理
-                                    </h5>
-                                    <p class="card-text">物料管理功能将在后续版本中实现</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- 数据导入 -->
-                <?php if ($currentTab === 'import'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <h5 class="card-title">
-                                        <i class="fas fa-upload"></i> 数据导入
-                                    </h5>
-                                    <p class="card-text">数据导入功能将在后续版本中实现</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- AI配置 -->
-                <?php if ($currentTab === 'ai'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <h5 class="card-title">
-                                        <i class="fas fa-robot"></i> AI配置
-                                    </h5>
-                                    <p class="card-text">AI配置功能将在后续版本中实现</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <!-- 邮件配置 -->
-                <?php if ($currentTab === 'email'): ?>
-                    <div class="row">
-                        <div class="col-md-12">
-                            <div class="card">
-                                <div class="card-body">
-                                    <h5 class="card-title">
-                                        <i class="fas fa-envelope"></i> 邮件配置
-                                    </h5>
-                                    <p class="card-text">邮件配置功能将在后续版本中实现</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif; ?>
+            <div class="top-stat">
+                <span>商品</span>
+                <strong><?= e($count) ?></strong>
             </div>
-        </div>
+        </header>
+
+        <nav class="nav-tabs" aria-label="主导航">
+            <a href="index.php">扫码</a>
+            <a href="dashboard.php">看板</a>
+            <a href="stocktake.php">盘点</a>
+            <a href="ai.php">AI</a>
+            <a href="records.php">记录</a>
+            <a class="active" href="admin.php">后台</a>
+        </nav>
+
+        <main>
+            <?php if ($notice): ?>
+                <div class="notice success"><?= e($notice) ?></div>
+            <?php endif; ?>
+            <?php if ($error): ?>
+                <div class="notice danger"><?= e($error) ?></div>
+            <?php endif; ?>
+
+            <section class="panel">
+                <div class="section-head">
+                    <h2>单个商品</h2>
+                    <span><?= e($categoryCount) ?> 个分类</span>
+                </div>
+                <form method="post" class="stack-form">
+                    <input type="hidden" name="action" value="save_product">
+
+                    <label class="field-label" for="sku">SKU</label>
+                    <input id="sku" name="sku" inputmode="numeric" autocomplete="off" placeholder="11107428" required>
+
+                    <label class="field-label" for="name">商品名称</label>
+                    <input id="name" name="name" autocomplete="off" placeholder="柠檬浓缩汁" required>
+
+                    <label class="field-label" for="category">分类</label>
+                    <input id="category" name="category" autocomplete="off" placeholder="糖浆 / 奶类 / 果汁">
+
+                    <label class="field-label" for="alert_days">提前提醒天数</label>
+                    <input id="alert_days" name="alert_days" type="number" min="0" max="365" step="1" inputmode="numeric" value="7">
+
+                    <label class="field-label" for="shelf_remove_days">提前下架天数</label>
+                    <input id="shelf_remove_days" name="shelf_remove_days" type="number" min="0" max="365" step="1" inputmode="numeric" value="0">
+
+                    <button class="primary-button wide" type="submit">保存商品</button>
+                </form>
+            </section>
+
+            <section class="panel">
+                <div class="section-head">
+                    <h2>发布版模块</h2>
+                    <span>v3.1.0</span>
+                </div>
+                <div class="quick-links">
+                    <a class="wide-button" href="stocktake.php">盘点单</a>
+                    <a class="wide-button" href="categories.php">分类规则</a>
+                    <a class="wide-button" href="records.php">导出记录</a>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="section-head">
+                    <h2>AI 设置</h2>
+                    <span><?= e(mask_secret($minimaxKey)) ?></span>
+                </div>
+                <form method="post" class="stack-form">
+                    <input type="hidden" name="action" value="save_ai_settings">
+
+                    <label class="field-label" for="minimax_key">MiniMax Token Plan Key</label>
+                    <input id="minimax_key" name="minimax_key" type="password" autocomplete="off" placeholder="留空表示不修改已保存 Key">
+
+                    <label class="field-label" for="minimax_model">模型</label>
+                    <input id="minimax_model" name="minimax_model" value="<?= e($minimaxModel) ?>" autocomplete="off">
+
+                    <label class="field-label" for="minimax_endpoint">接口地址</label>
+                    <input id="minimax_endpoint" name="minimax_endpoint" value="<?= e($minimaxEndpoint) ?>" autocomplete="off">
+
+                    <label class="check-row">
+                        <input name="clear_minimax_key" type="checkbox" value="1">
+                        <span>清空已保存的 Key</span>
+                    </label>
+
+                    <button class="wide-button" type="submit">保存 AI 设置</button>
+                </form>
+            </section>
+
+            <section class="panel">
+                <h2>批量导入</h2>
+                <p class="hint-text">支持 SKU、商品名称、分类、提醒天数、下架天数。只有前两列也可以照常导入。</p>
+                <form method="post" enctype="multipart/form-data" class="stack-form">
+                    <input type="hidden" name="action" value="upload_csv">
+                    <label class="field-label" for="products_file">CSV 或 TXT 文件</label>
+                    <input id="products_file" name="products_file" type="file" accept=".csv,.txt,text/csv,text/plain">
+                    <button class="wide-button" type="submit">上传导入</button>
+                </form>
+
+                <form method="post" class="stack-form paste-form">
+                    <input type="hidden" name="action" value="paste_import">
+                    <label class="field-label" for="products_text">从 Excel 复制后粘贴</label>
+                    <textarea id="products_text" name="products_text" rows="6" placeholder="SKU,商品名称,分类,提醒天数,下架天数&#10;11107428,柠檬浓缩汁,果汁,7,0"></textarea>
+                    <button class="wide-button" type="submit">粘贴导入</button>
+                </form>
+            </section>
+
+            <section class="panel">
+                <div class="section-head">
+                    <h2>商品列表</h2>
+                    <form method="get" class="search-form">
+                        <input name="q" value="<?= e($q) ?>" placeholder="搜索 SKU/名称/分类">
+                    </form>
+                </div>
+
+                <?php if (!$products): ?>
+                    <p class="empty-state">没有找到商品。</p>
+                <?php else: ?>
+                    <div class="product-list">
+                        <?php foreach ($products as $product): ?>
+                            <article class="product-row">
+                                <div>
+                                    <strong><?= e($product['name']) ?></strong>
+                                    <span>
+                                        SKU <?= e($product['sku']) ?>
+                                        <?php if ($product['category']): ?>
+                                            · <?= e($product['category']) ?>
+                                        <?php endif; ?>
+                                        · <?= e(product_alert_days($product)) ?> 天提醒
+                                    </span>
+                                </div>
+                                <form method="post" onsubmit="return confirm('删除这个 SKU？');">
+                                    <input type="hidden" name="action" value="delete_product">
+                                    <input type="hidden" name="sku" value="<?= e($product['sku']) ?>">
+                                    <button class="text-button danger-text" type="submit">删除</button>
+                                </form>
+                            </article>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </section>
+        </main>
     </div>
-</div>
-
-<!-- 添加用户模态框 -->
-<div class="modal fade" id="addUserModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-plus"></i> 添加用户
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="post">
-                <input type="hidden" name="action" value="add_user">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="username" class="form-label">用户名</label>
-                        <input type="text" class="form-control" id="username" name="username" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="password" class="form-label">密码</label>
-                        <input type="password" class="form-control" id="password" name="password" required minlength="6">
-                    </div>
-                    <div class="mb-3">
-                        <label for="email" class="form-label">邮箱</label>
-                        <input type="email" class="form-control" id="email" name="email" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="role" class="form-label">角色</label>
-                        <select class="form-select" id="role" name="role" required>
-                            <option value="user">普通用户</option>
-                            <option value="admin">管理员</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="submit" class="btn btn-primary">添加</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- 编辑用户模态框 -->
-<div class="modal fade" id="editUserModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-edit"></i> 编辑用户
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="post">
-                <input type="hidden" name="action" value="update_user">
-                <input type="hidden" name="user_id" id="editUserId">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="editUsername" class="form-label">用户名</label>
-                        <input type="text" class="form-control" id="editUsername" name="username" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="editEmail" class="form-label">邮箱</label>
-                        <input type="email" class="form-control" id="editEmail" name="email" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="editRole" class="form-label">角色</label>
-                        <select class="form-select" id="editRole" name="role" required>
-                            <option value="user">普通用户</option>
-                            <option value="admin">管理员</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="submit" class="btn btn-primary">保存</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<!-- 删除用户模态框 -->
-<div class="modal fade" id="deleteUserModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-trash"></i> 删除用户
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p id="deleteUserMessage"></p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">删除</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 更改密码模态框 -->
-<div class="modal fade" id="changePasswordModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-key"></i> 更改密码
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <form method="post">
-                <input type="hidden" name="action" value="change_password">
-                <input type="hidden" name="user_id" id="changePasswordUserId">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="newPassword" class="form-label">新密码</label>
-                        <input type="password" class="form-control" id="newPassword" name="new_password" required minlength="6">
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="submit" class="btn btn-primary">保存</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<script>
-    // 编辑用户按钮事件
-    $('.edit-user-btn').click(function() {
-        const id = $(this).data('id');
-        const username = $(this).data('username');
-        const email = $(this).data('email');
-        const role = $(this).data('role');
-        
-        $('#editUserId').val(id);
-        $('#editUsername').val(username);
-        $('#editEmail').val(email);
-        $('#editRole').val(role);
-        $('#editUserModal').modal('show');
-    });
-
-    // 删除用户按钮事件
-    $('.delete-user-btn').click(function() {
-        const id = $(this).data('id');
-        const username = $(this).data('username');
-        
-        $('#deleteUserMessage').text('确定要删除用户 ' + username + ' 吗？');
-        $('#deleteUserModal').data('user-id', id);
-        $('#deleteUserModal').modal('show');
-    });
-
-    // 确认删除按钮事件
-    $('#confirmDeleteBtn').click(function() {
-        const userId = $('#deleteUserModal').data('user-id');
-        
-        $.post('', {
-            action: 'delete_user',
-            user_id: userId
-        }, function() {
-            location.reload();
-        });
-    });
-
-    // 更改密码按钮事件
-    $('.change-password-btn').click(function() {
-        const id = $(this).data('id');
-        const username = $(this).data('username');
-        
-        $('#changePasswordUserId').val(id);
-        $('#changePasswordModal').modal('show');
-    });
-</script>
-
-<?php include 'includes/footer.php'; ?>
+</body>
+</html>
